@@ -1,0 +1,101 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6",
+    "name": "Cycling Stats API",
+    "description": "测试 Flask 后端三大环赛数据 API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. 欢迎页",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": [""]
+        },
+        "description": "测试服务器是否在运行"
+      },
+      "response": []
+    },
+    {
+      "name": "2. 获取所有赛事",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/races",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "races"]
+        },
+        "description": "获取所有基础赛事 (例如: 环法, 环意)"
+      },
+      "response": []
+    },
+    {
+      "name": "3. 获取赛事的届数 (年份)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/races/1/editions",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "races", "1", "editions"]
+        },
+        "description": "获取 race_id=1 (环法) 的所有届数。如果不存在，请尝试其他 race_id。"
+      },
+      "response": []
+    },
+    {
+      "name": "4. 获取某届赛事的所有赛段",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/editions/1/stages",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "editions", "1", "stages"]
+        },
+        "description": "获取 edition_id=1 的所有赛段。请确保 ID 存在。"
+      },
+      "response": []
+    },
+    {
+      "name": "5. 获取赛段成绩单",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/stages/1/results",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "stages", "1", "results"]
+        },
+        "description": "获取 stage_id=1 的完整成绩单 (按排名)。请确保 ID 存在。"
+      },
+      "response": []
+    },
+    {
+      "name": "6. 获取车手详情",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/riders/1",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "riders", "1"]
+        },
+        "description": "获取 rider_id=1 的详细信息和最近成绩。请确保 ID 存在。"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:5000",
+      "type": "default"
+    }
+  ]
+}
