@@ -1,29 +1,53 @@
-# 数据库课程设计
+# 数据库课程设计（Cycling Forum 项目）———— AI 生成的 README
 
-本仓库为同济大学计算机系的数据库课程设计项目代码，包含用于展示“三大环赛”数据的前端、后端与数据处理脚本
+本仓库为课程设计项目代码，包含用于展示“三大环赛”数据的前端、后端与数据处理脚本，并扩展为一个简单的社交论坛（含用户注册/邮箱验证/头像与个人中心）。
 
 **项目概览**
 
 - 前端：Vue 3 + TypeScript（Vite 构建）
-- 后端：Flask + SQLAlchemy（SQLite 数据库用于本地开发）
-- 数据：CSV 抓取脚本 + 导入脚本，将爬取结果导入数据库
-- API：REST 风格接口，供前端调用
+- 后端：FastAPI + SQLAlchemy（开发时使用 MySQL，使用 Alembic 管理迁移）
+- 认证：JWT（访问/刷新 token） + `passlib` 密码哈希
+- 邮件：SMTP（用于邮箱验证与重置密码）
+- 文件：头像文件上传并通过后端静态路由提供访问
 
 **快速目录结构**
 
-- `backend/`：Flask 后端应用，包含 `app.py`、`models/`、数据库文件 `cycling_stats.db`（若已生成）
+- `backend/`：FastAPI 后端，包含 `app.py`、`models/`、`schemas.py`、上传目录 `uploads/` 等
 - `cycling-forum/`：前端 Vue 项目（Vite + TypeScript）
-- `tdf-scraper.py`, `tdf-scraper2.py`：爬虫脚本（用于抓取赛事数据）
-- `temp.py`：示例图像/原型生成脚本
-- `README.md`：本文件
+- `Data Scraper/`：数据抓取脚本与原始 CSV 文件
 
 **本地开发 — 先决条件**
 
 - Node.js（建议 18+）与 npm 或 pnpm/yarn
-- Python 3.8+（建议使用虚拟环境或 conda）
-- 推荐：在 Windows 上使用 PowerShell
+- Python 3.10+（建议使用虚拟环境或 conda）
+- MySQL（或本地调整为其它兼容数据库）
 
-**后端（Flask） 本地运行**
+**可选：Redis（缓存加速，本地 WSL）**
+
+- 项目支持使用 Redis 作为缓存/会话提升访问效率（推荐在本地开发或测试使用）。
+- 如果你在 Windows 上使用 WSL（例如 Ubuntu 24.04.2），可以在 WSL 中安装并运行 Redis：
+
+```bash
+# 在 WSL（Ubuntu）中安装并启动 redis-server
+sudo apt update
+sudo apt install -y redis-server
+sudo service redis-server start
+
+# 验证 Redis 是否可用
+redis-cli ping    # 应返回 PONG
+```
+
+- 后端示例环境变量：
+
+```
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+- 在 WSL2 下，使用 `127.0.0.1` 或 `localhost` 一般即可从 Windows 访问运行在 WSL 中的 Redis；如果遇到网络问题，请确认 WSL 网络设置或使用 `wsl hostname -I` 检查 IP。
+
+- 后端代码会通过该 `REDIS_URL` 连接 Redis，用于缓存热点请求（如排行榜/统计）和加速会话校验。
+
+**后端（FastAPI） 本地运行**
 
 1. 进入后端目录：
 
@@ -45,19 +69,25 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. 安装依赖（若项目包含 requirements.txt）：
+3. 安装依赖：
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-4. 运行后端（默认端口 5000）：
+4. 配置环境变量（示例）：
+
+- `DATABASE_URL`（例如：mysql+pymysql://user:pass@localhost/dbname）
+- `SECRET_KEY`（JWT 与其它加密用途）
+- SMTP 配置（`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`）
+
+5. 运行后端（默认使用端口 8000）：
 
 ```powershell
-python app.py
+uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-后端启动后，API 根路径通常为 `http://127.0.0.1:5000/api`。
+后端 API 根路径为 `http://127.0.0.1:8000/api`。
 
 **前端（Vue） 本地运行**
 
@@ -74,51 +104,52 @@ npm install
 npm run dev
 ```
 
-默认使用 Vite，前端会在 `http://localhost:5173`（或命令行显示的端口）提供预览。
+前端默认由 Vite 提供，通常在 `http://localhost:5173` 运行。
 
-**已实现的主要 API（快速列表）**
+**主要 API（摘要）**
 
-- `GET /api/races` — 返回赛事列表（环法、环意等）
-- `GET /api/races/<race_id>/editions` — 返回该赛事的届数（按年份）
-- `GET /api/editions/<edition_id>/stages` — 返回该届赛事的赛段列表
-- `GET /api/stages/<stage_id>/results` — 返回某一赛段的成绩列表
-- `GET /api/riders` — 返回车手列表
-- `GET /api/riders/<rider_id>` — 返回车手统计（参赛数、冠军数、效力车队）
-- `GET /api/riders/<rider_id>/races` — 返回该车手的所有参赛赛段记录
-- `GET /api/riders/<rider_id>/wins` — 返回该车手的所有赛段冠军记录
+- 用户与认证：
 
-(更多细节请查看 `backend/app.py`）
+  - `POST /api/auth/register` — 注册（会发送验证邮件）
+  - `POST /api/auth/login` — 登录（返回 `access_token` / `refresh_token`）
+  - `POST /api/auth/verify-email` — 邮箱验证
+  - `POST /api/auth/resend-verification` — 重新发送验证邮件
+  - `POST /api/auth/forgot-password` — 发送密码重置邮件
+  - `POST /api/auth/reset-password` — 重置密码
+  - `PUT /api/auth/update-nickname` — 修改昵称（需登录）
+  - `PUT /api/auth/update-password` — 修改密码（需登录）
+  - `POST /api/auth/update-avatar` — 上传并更新当前用户头像（需登录）
 
-**前端已实现页面**
+- 文件上传与静态：
 
-- `LandingPage`：主页，具有颜色主题与导航入口
-- `RacesView`：赛事 → 届数 → 赛段 的下拉联动，并展示赛段成绩
-- `RidersView`：车手搜索与浏览
-- `RiderDetailView`：车手详情页，包含参赛记录、赛段冠军与车队历史
+  - `POST /api/upload/avatar` — 仅上传图片并返回 `avatar_url`
+  - 已上传文件通过 `/uploads/avatars/<filename>` 提供访问
 
-**数据导入与爬虫**
+- 数据查询（示例）：
+  - `GET /api/races`, `GET /api/riders`, `GET /api/editions/...` 等（详见 `backend/app.py`）
 
-- `tdf-scraper.py`, `tdf-scraper2.py`：爬取数据脚本（请在运行前阅读脚本头部注释，确认依赖与目标 URL）
-- 数据导入脚本（若存在于 `backend/models/` 或 `backend/scripts/`）会将 CSV 数据插入到 SQLite 数据库
+**前端功能亮点**
 
-**调试与测试提示**
+- 个人中心（`UserProfileView`）：可查看用户信息、查看头像大图、上传/修改头像、修改昵称与密码。
+- 点击头像会打开模态框查看大图，模态框内可直接选择并上传新头像，上传后页面会实时更新。
 
-- 如果前端调用 API 返回 CORS 错误，确认后端已启用 CORS（`backend/app.py` 使用 flask-cors）并且后端在运行。
-- 若出现依赖缺失（如 `flask` 或 `sqlalchemy`），请在后端环境中运行 `pip install -r requirements.txt` 或手动安装所需包。
+**调试与注意事项**
 
-**常见命令一览（PowerShell）**
+- 如果前端出现 CORS 问题，确认后端已启用 CORS 并正确允许前端地址。
+- 修改后端代码（如新增接口）后请重启 `uvicorn`，以确保路由生效。
+- 确保 `.env` 或环境变量中配置了正确的数据库与 SMTP 凭证，邮箱验证与重置密码功能依赖 SMTP 可用性。
+
+**常见命令**
 
 ```powershell
-# 启动后端（在 backend 目录）
-python app.py
+# 启动后端（backend 目录）
+uvicorn app:app --reload --host 127.0.0.1 --port 8000
 
-# 启动前端（在 cycling-forum 目录）
+# 启动前端（cycling-forum 目录）
 npm install
 npm run dev
 ```
 
-**联系/作者**
+**联系 / 作者**
 
-- 仓库所有者 / GitHub: `ArcB1213`
-
----
+- 仓库所有者: ArcB1213
