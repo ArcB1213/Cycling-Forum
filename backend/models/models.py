@@ -2,10 +2,11 @@
 数据库模型定义 - 使用纯 SQLAlchemy 2.0
 兼容 MySQL
 """
-from sqlalchemy import Integer, String, Numeric, ForeignKey, Index, BigInteger
+from sqlalchemy import Integer, String, Numeric, ForeignKey, Index, BigInteger, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List, Optional
 from decimal import Decimal
+from datetime import datetime
 
 
 class Base(DeclarativeBase):
@@ -171,4 +172,34 @@ class StageResult(Base):
             data['team_name'] = self.team.team_name if self.team else None
         if include_stage:
             data['stage'] = self.stage.to_dict() if self.stage else None
-        return data
+
+
+class User(Base):
+    """用户模型 - 用于认证和授权"""
+    __tablename__ = 'users'
+    
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    nickname: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    avatar: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, default="/src/assets/default.jpg")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # 邮箱验证相关字段
+    is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
+    verification_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    verification_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
+    # 密码重置相关字段
+    reset_password_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reset_password_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
+    def to_dict(self):
+        return {
+            'user_id': self.user_id,
+            'email': self.email,
+            'nickname': self.nickname,
+            'avatar': self.avatar,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'is_verified': self.is_verified,
+        }

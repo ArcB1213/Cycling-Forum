@@ -18,7 +18,8 @@ body {
     'Segoe UI',
     Roboto,
     sans-serif;
-  background-color: #f1f5f9; /* slate-100 */
+  /* background-color: #f1f5f9; */
+  background: linear-gradient(180deg, #ffed00 70%, black 100%);
   color: #1e293b; /* slate-800 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

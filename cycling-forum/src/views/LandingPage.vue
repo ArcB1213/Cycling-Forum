@@ -1,7 +1,18 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import apiService from '@/services/ApiServices'
+import { ref, onMounted } from 'vue'
+import type { User } from '@/interfaces/types'
 
 const router = useRouter()
+const currentUser = ref<User | null>(null)
+
+onMounted(() => {
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    currentUser.value = JSON.parse(userStr)
+  }
+})
 
 const navigateToRaces = () => {
   router.push('/races')
@@ -10,10 +21,40 @@ const navigateToRaces = () => {
 const navigateToRiders = () => {
   router.push('/riders')
 }
+
+const navigateToForum = () => {
+  router.push('/forum')
+}
+
+const navigateToLogin = () => {
+  router.push('/login')
+}
+
+const navigateToProfile = () => {
+  router.push('/profile')
+}
+
+const handleLogout = () => {
+  apiService.logout()
+  currentUser.value = null
+  router.push('/')
+}
 </script>
 
 <template>
   <div class="landing-container">
+    <!-- 顶部用户栏 -->
+    <div class="user-bar">
+      <div v-if="currentUser" class="user-info" @click="navigateToProfile">
+        <span>欢迎, {{ currentUser.nickname }}</span>
+        <button @click.stop="handleLogout" class="btn-logout-small">退出</button>
+      </div>
+      <div v-else class="auth-links">
+        <button @click="navigateToLogin" class="btn-login-small">登录</button>
+        <button @click="() => router.push('/register')" class="btn-register-small">注册</button>
+      </div>
+    </div>
+
     <div class="hero-section">
       <h1 class="hero-title">环法自行车赛交流站</h1>
       <p class="hero-subtitle">探索百年赛事历史，追踪传奇车手足迹</p>
@@ -36,7 +77,8 @@ const navigateToRiders = () => {
         <div class="card-arrow">→</div>
       </div>
 
-      <div class="entry-card rider-card" @click="navigateToRiders">
+      <!-- 论坛入口卡片 -->
+      <div class="entry-card forum-card" @click="navigateToForum">
         <div class="card-icon">🗣️</div>
         <h2 class="card-title">论坛</h2>
         <p class="card-description">参与讨论，分享观点，连接环法自行车赛爱好者社区</p>
@@ -57,7 +99,7 @@ const navigateToRiders = () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 2rem;
+  /* padding: 2rem; */
   font-family:
     'Inter',
     -apple-system,
@@ -80,17 +122,17 @@ const navigateToRiders = () => {
   background: linear-gradient(
     135deg,
     #ff286e 0%,
-    #ff286e 30%,
-    #ffed00 30%,
-    #ffed00 55%,
-    #da291c 55%,
+    #ff286e 35%,
+    #ffed00 35%,
+    #ffed00 65%,
+    #da291c 65%,
     #da291c 100%
   );
   z-index: 0;
-  clip-path: polygon(20% 0%, 80% 0%, 60% 100%, 0% 100%);
+  clip-path: polygon(25% 0%, 100% 0%, 75% 100%, 0% 100%);
 }
 
-/* 中间黄色区域（环法 - 加宽视觉中心） */
+/* 柏油状纹理 */
 .landing-container::after {
   content: '';
   position: absolute;
@@ -98,45 +140,33 @@ const navigateToRiders = () => {
   left: 0;
   width: 100%;
   height: 100%;
-  background:
-    linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.05) 25%,
-      transparent 25%,
-      transparent 50%,
-      rgba(255, 255, 255, 0.05) 50%,
-      rgba(255, 255, 255, 0.05) 75%,
-      transparent 75%,
-      transparent
-    ),
-    linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.05) 25%,
-      transparent 25%,
-      transparent 50%,
-      rgba(255, 255, 255, 0.05) 50%,
-      rgba(255, 255, 255, 0.05) 75%,
-      transparent 75%,
-      transparent
-    );
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.1) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.1) 75%,
+    transparent 75%,
+    transparent 100%
+  );
   background-size: 60px 60px;
-  background-position:
-    0 0,
-    30px 30px;
-  clip-path: polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%);
+  background-blend-mode: multiply;
+  clip-path: polygon(25% 0%, 100% 0%, 75% 100%, 0% 100%);
   z-index: 1;
 }
 
 /* 纹理覆盖层 - 沥青路面效果 */
 .landing-container {
-  background: repeating-linear-gradient(
+  /* background: repeating-linear-gradient(
     90deg,
     rgba(0, 0, 0, 0.187) 0px,
     rgba(0, 0, 0, 0.432) 2px,
     transparent 2px,
     transparent 4px
   );
-  background-attachment: fixed;
+  background-attachment: fixed; */
+  background-color: rgba(48, 47, 47, 0.968);
 }
 
 .hero-section {
@@ -248,13 +278,89 @@ const navigateToRiders = () => {
 }
 
 .landing-footer {
-  margin-top: 4rem;
-  color: rgba(255, 255, 255, 0.9);
+  margin-top: 10rem;
+  color: black;
   font-size: 0.875rem;
   position: relative;
   z-index: 10;
   font-weight: 500;
-  text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.3);
+  text-shadow: 1px 1px 4px rgba(230, 228, 228, 0.3);
+}
+
+/* 用户栏样式 */
+.user-bar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  padding: 15px 30px;
+  z-index: 1000;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  color: white;
+  font-weight: 600;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: opacity 0.3s;
+}
+
+.user-info span {
+  color: black;
+  font-weight: bold;
+  border: #ff286e 2px solid;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.user-info span:hover {
+  background-color: #ff286e;
+  color: white;
+}
+
+.auth-links {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-logout-small,
+.btn-login-small,
+.btn-register-small {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.btn-logout-small {
+  background: rgba(231, 76, 60, 0.9);
+  color: white;
+}
+
+.btn-logout-small:hover {
+  background: rgba(192, 57, 43, 1);
+}
+
+.btn-login-small {
+  background: rgba(255, 255, 255, 0.9);
+  color: #667eea;
+}
+
+.btn-login-small:hover {
+  background: white;
+}
+
+.btn-register-small {
+  background: rgba(102, 126, 234, 0.9);
+  color: white;
+}
+
+.btn-register-small:hover {
+  background: rgba(102, 126, 234, 1);
 }
 
 @keyframes fadeInDown {
@@ -287,6 +393,17 @@ const navigateToRiders = () => {
   .cards-container {
     grid-template-columns: 1fr;
     max-width: 400px;
+  }
+
+  .user-bar {
+    padding: 10px 15px;
+  }
+
+  .btn-logout-small,
+  .btn-login-small,
+  .btn-register-small {
+    padding: 6px 12px;
+    font-size: 14px;
   }
 }
 </style>
