@@ -1,14 +1,25 @@
-from sqlalchemy import Numeric
-# 从 extensions.py 导入 db 实例
-from models.extensions import db
+"""
+数据库模型定义 - 使用纯 SQLAlchemy 2.0
+"""
+from sqlalchemy import Integer, String, Numeric, ForeignKey, Index
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from typing import List, Optional
+from decimal import Decimal
 
-# 注意：这里不再有 app, Flask, Migrate 的代码
 
-class Race(db.Model):
+class Base(DeclarativeBase):
+    """所有模型的基类"""
+    pass
+
+
+class Race(Base):
     __tablename__ = 'races'
-    race_id = db.Column(db.Integer, primary_key=True)
-    race_name = db.Column(db.String(100), unique=True, nullable=False)
-    editions = db.relationship('Edition', back_populates='race', lazy=True)
+    
+    race_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    race_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    
+    # 关系
+    editions: Mapped[List["Edition"]] = relationship(back_populates='race', lazy='select')
 
     def to_dict(self):
         return {
@@ -16,14 +27,21 @@ class Race(db.Model):
             'race_name': self.race_name,
         }
 
-class Edition(db.Model):
+
+class Edition(Base):
     __tablename__ = 'editions'
-    edition_id = db.Column(db.Integer, primary_key=True)
-    race_id = db.Column(db.Integer, db.ForeignKey('races.race_id'), nullable=False)
-    year = db.Column(db.Integer, nullable=False)
     
-    race = db.relationship('Race', back_populates='editions')
-    stages = db.relationship('Stage', back_populates='edition', lazy=True, cascade="all, delete-orphan")
+    edition_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    race_id: Mapped[int] = mapped_column(ForeignKey('races.race_id'), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    # 关系
+    race: Mapped["Race"] = relationship(back_populates='editions')
+    stages: Mapped[List["Stage"]] = relationship(
+        back_populates='edition', 
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
 
     def to_dict(self):
         return {
@@ -32,11 +50,15 @@ class Edition(db.Model):
             'year': self.year,
         }
 
-class Team(db.Model):
+
+class Team(Base):
     __tablename__ = 'teams'
-    team_id = db.Column(db.Integer, primary_key=True)
-    team_name = db.Column(db.String(200), unique=True, nullable=False)
-    results = db.relationship('StageResult', back_populates='team', lazy=True)
+    
+    team_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    team_name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    
+    # 关系
+    results: Mapped[List["StageResult"]] = relationship(back_populates='team', lazy='select')
 
     def to_dict(self):
         return {
@@ -44,11 +66,15 @@ class Team(db.Model):
             'team_name': self.team_name,
         }
 
-class Rider(db.Model):
+
+class Rider(Base):
     __tablename__ = 'riders'
-    rider_id = db.Column(db.Integer, primary_key=True)
-    rider_name = db.Column(db.String(200), unique=True, nullable=False)
-    results = db.relationship('StageResult', back_populates='rider', lazy=True)
+    
+    rider_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rider_name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    
+    # 关系
+    results: Mapped[List["StageResult"]] = relationship(back_populates='rider', lazy='select')
 
     def to_dict(self):
         return {
@@ -56,41 +82,56 @@ class Rider(db.Model):
             'rider_name': self.rider_name,
         }
 
-class Stage(db.Model):
+
+class Stage(Base):
     __tablename__ = 'stages'
-    stage_id = db.Column(db.Integer, primary_key=True)
-    edition_id = db.Column(db.Integer, db.ForeignKey('editions.edition_id'), nullable=False, index=True) # 保留索引
-    stage_number = db.Column(db.Numeric(4, 1), nullable=False) 
-    stage_route = db.Column(db.String(200), nullable=True)
     
-    edition = db.relationship('Edition', back_populates='stages')
-    results = db.relationship('StageResult', back_populates='stage', lazy=True, cascade="all, delete-orphan")
+    stage_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    edition_id: Mapped[int] = mapped_column(
+        ForeignKey('editions.edition_id'), 
+        nullable=False, 
+        index=True
+    )
+    stage_number: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False)
+    stage_route: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    
+    # 关系
+    edition: Mapped["Edition"] = relationship(back_populates='stages')
+    results: Mapped[List["StageResult"]] = relationship(
+        back_populates='stage',
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
 
     def to_dict(self):
         return {
             'stage_id': self.stage_id,
             'edition_id': self.edition_id,
-            'stage_number': float(self.stage_number), # 将 Decimal 转为 float
+            'stage_number': float(self.stage_number),
             'stage_route': self.stage_route,
         }
 
-class StageResult(db.Model):
-    __tablename__ = 'stage_results'
-    result_id = db.Column(db.Integer, primary_key=True)
-    stage_id = db.Column(db.Integer, db.ForeignKey('stages.stage_id'), nullable=False)
-    rider_id = db.Column(db.Integer, db.ForeignKey('riders.rider_id'), nullable=False)
-    team_id = db.Column(db.Integer, db.ForeignKey('teams.team_id'), nullable=False)
-    rank = db.Column(db.Integer, nullable=False)
-    time_in_seconds = db.Column(db.Integer, nullable=False)
-    
-    stage = db.relationship('Stage', back_populates='results')
-    rider = db.relationship('Rider', back_populates='results')
-    team = db.relationship('Team', back_populates='results')
 
+class StageResult(Base):
+    __tablename__ = 'stage_results'
+    
+    result_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    stage_id: Mapped[int] = mapped_column(ForeignKey('stages.stage_id'), nullable=False)
+    rider_id: Mapped[int] = mapped_column(ForeignKey('riders.rider_id'), nullable=False)
+    team_id: Mapped[int] = mapped_column(ForeignKey('teams.team_id'), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_in_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    # 关系
+    stage: Mapped["Stage"] = relationship(back_populates='results')
+    rider: Mapped["Rider"] = relationship(back_populates='results')
+    team: Mapped["Team"] = relationship(back_populates='results')
+
+    # 复合索引
     __table_args__ = (
-        db.Index('idx_stage_rank', 'stage_id', 'rank'), 
-        db.Index('idx_rider_stage', 'rider_id', 'stage_id'), 
-        db.Index('idx_team_rank', 'team_id', 'rank'),
+        Index('idx_stage_rank', 'stage_id', 'rank'),
+        Index('idx_rider_stage', 'rider_id', 'stage_id'),
+        Index('idx_team_rank', 'team_id', 'rank'),
     )
 
     def to_dict(self, include_relations=False, include_stage=False):
@@ -103,7 +144,6 @@ class StageResult(db.Model):
             'time_in_seconds': self.time_in_seconds,
         }
         if include_relations:
-            # 仅当需要时才加载关联数据，避免性能问题
             data['rider_name'] = self.rider.rider_name if self.rider else None
             data['team_name'] = self.team.team_name if self.team else None
         if include_stage:

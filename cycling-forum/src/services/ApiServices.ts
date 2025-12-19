@@ -10,9 +10,9 @@ import type {
   ApiRiderWins,
 } from '@/interfaces/types' // 导入类型
 
-// 你的 Flask 后端地址
+// FastAPI 后端地址（uvicorn 默认端口 8000）
 const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:5000/api',
+  baseURL: 'http://127.0.0.1:8000/api',
   headers: {
     'Content-Type': 'application/json',
   },
