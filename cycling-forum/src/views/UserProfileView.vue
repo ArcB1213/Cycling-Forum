@@ -162,7 +162,7 @@ onMounted(async () => {
 })
 
 const goBack = () => {
-  router.push('/')
+  router.back()
 }
 
 const getAvatarUrl = () => {

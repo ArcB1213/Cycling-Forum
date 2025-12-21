@@ -91,6 +91,49 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
+# ============ 文件操作辅助函数 ============
+
+def delete_old_avatar(avatar_path: str) -> None:
+    """
+    删除旧头像文件
+    
+    Args:
+        avatar_path: 相对路径，例如 "/uploads/avatars/uuid.jpg"
+    
+    注意：
+        - 不删除默认头像 ("default")
+        - 如果文件不存在不抛出异常
+    """
+    # 检查是否是默认头像
+    if not avatar_path or avatar_path == "default":
+        return
+    
+    try:
+        # 从相对路径提取文件名
+        # 处理格式："/uploads/avatars/filename.ext" 或 "uploads/avatars/filename.ext"
+        if "/" in avatar_path:
+            filename = avatar_path.split("/")[-1]
+        else:
+            filename = avatar_path
+        
+        # 构建完整文件路径
+        file_path = UPLOAD_DIR / filename
+        
+        # 安全检查：确保路径在上传目录内
+        if file_path.parent != UPLOAD_DIR:
+            print(f"[WARN] 试图删除目录外的文件: {file_path}")
+            return
+        
+        # 删除文件
+        if file_path.exists():
+            file_path.unlink()
+            print(f"[INFO] 已删除旧头像: {filename}")
+        else:
+            print(f"[WARN] 旧头像文件不存在: {filename}")
+    except Exception as e:
+        print(f"[ERROR] 删除旧头像失败: {str(e)}")
+
+
 # ============ API 路由 ============
 
 @app.get("/", tags=["Root"])
@@ -1104,7 +1147,16 @@ async def update_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """上传并更新用户头像"""
+    """上传并更新用户头像
+    
+    功能：
+    - 验证图片格式和大小
+    - 删除旧头像文件（默认头像除外）
+    - 保存新头像
+    
+    支持格式：JPG, PNG, GIF, WebP
+    最大大小：5MB
+    """
     # 验证文件类型
     allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
     if file.content_type not in allowed_types:
@@ -1114,6 +1166,9 @@ async def update_avatar(
     MAX_SIZE = 5 * 1024 * 1024
     if file.size and file.size > MAX_SIZE:
         raise HTTPException(status_code=400, detail="文件大小不能超过 5MB")
+    
+    # 保存旧头像路径（用于删除）
+    old_avatar = current_user.avatar
     
     # 生成安全的文件名
     ext = file.filename.split(".")[-1] if file.filename else "jpg"
@@ -1132,6 +1187,10 @@ async def update_avatar(
     current_user.avatar = avatar_path
     db.commit()
     db.refresh(current_user)
+    
+    # 异步删除旧头像（不阻塞响应）
+    if old_avatar and old_avatar != "default":
+        delete_old_avatar(old_avatar)
     
     return current_user
 

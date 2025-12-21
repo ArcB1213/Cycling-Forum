@@ -2,9 +2,9 @@
   <div class="forum-container">
     <div class="forum-header">
       <h1>🏁 自行车论坛</h1>
-      <div class="user-info">
+      <div class="user-info" @click="navigateToProfile">
         <span>欢迎, {{ user?.nickname }}</span>
-        <button @click="handleLogout" class="btn-logout">退出登录</button>
+        <button @click.stop="handleLogout" class="btn-logout">退出登录</button>
       </div>
     </div>
 
@@ -103,6 +103,10 @@ const handleLogout = () => {
   router.push('/login')
 }
 
+const navigateToProfile = () => {
+  router.push('/profile')
+}
+
 onMounted(() => {
   // 从 localStorage 获取用户信息
   const storedUser = localStorage.getItem('user')
@@ -144,12 +148,24 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 15px;
+  color: white;
+  font-weight: 600;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: opacity 0.3s;
 }
 
 .user-info span {
-  font-size: 16px;
-  color: #555;
-  font-weight: 600;
+  color: black;
+  font-weight: bold;
+  border: #ff286e 2px solid;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.user-info span:hover {
+  background-color: #ff286e;
+  color: white;
 }
 
 .btn-logout {
