@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List
 from contextlib import asynccontextmanager
 import re
@@ -28,6 +28,7 @@ from schemas import (
     UserRegister, UserLogin, UserResponse, TokenResponse, RefreshTokenRequest,
     EmailVerificationRequest, EmailVerificationResponse, VerifyEmailRequest,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse, RegisterResponse,
+    PaginationMeta, PaginatedRidersResponse, PaginatedStageResultsResponse,
     UpdateNicknameRequest, UpdatePasswordRequest
 )
 
@@ -90,16 +91,6 @@ def index():
     return {"message": "欢迎来到三大环赛数据 API！", "docs": "/docs"}
 
 
-# ============ 同步 API 路由（保留向后兼容）============
-
-@app.get("/api/races", response_model=List[RaceBase], tags=["Races"])
-@cache_response("races", expire=600)
-def get_races(db: Session = Depends(get_db)):
-    """获取所有赛事 (例如: 环法, 环意) - 同步版本"""
-    races = db.query(Race).order_by(Race.race_id).all()
-    return [race.to_dict() for race in races]
-
-
 # ============ 异步 API 路由（高并发优化）============
 
 @app.get("/api/async/races", response_model=List[RaceBase], tags=["Races (Async)"])
@@ -160,14 +151,24 @@ async def get_stages_async(edition_id: int, db: AsyncSession = Depends(get_async
     }
 
 
-@app.get("/api/async/stages/{stage_id}/results", response_model=StageResultsResponse, tags=["Stages (Async)"])
+@app.get("/api/async/stages/{stage_id}/results", response_model=PaginatedStageResultsResponse, tags=["Stages (Async)"])
 @cache_response("stage_results_async", expire=3600)
-async def get_stage_results_async(stage_id: int, db: AsyncSession = Depends(get_async_db)):
+async def get_stage_results_async(stage_id: int, page: int = 1, limit: int = 20, db: AsyncSession = Depends(get_async_db)):
     """获取某一赛段的完整成绩单 (按排名) - 异步版本（推荐用于高并发）"""
     result = await db.execute(select(Stage).filter(Stage.stage_id == stage_id))
     stage = result.scalar_one_or_none()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
+    
+    # 计算总记录数
+    count_result = await db.execute(
+        select(func.count()).select_from(StageResult).filter(StageResult.stage_id == stage.stage_id)
+    )
+    total = count_result.scalar() or 0
+    
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
     
     # 使用 selectinload 预加载关联数据，避免 N+1 查询问题
     result = await db.execute(
@@ -178,6 +179,8 @@ async def get_stage_results_async(stage_id: int, db: AsyncSession = Depends(get_
         )
         .filter(StageResult.stage_id == stage.stage_id)
         .order_by(StageResult.rank)
+        .offset(offset)
+        .limit(limit)
     )
     results = result.scalars().all()
     
@@ -195,18 +198,67 @@ async def get_stage_results_async(stage_id: int, db: AsyncSession = Depends(get_
             "team_name": res.team.team_name if res.team else None
         })
     
-    return {"stage_info": stage.to_dict(), "results": results_with_relations}
+    return {
+        "stage_info": stage.to_dict(),
+        "data": results_with_relations,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
 # ============ 异步骑手相关 API ============
 
-@app.get("/api/async/riders", response_model=List[RiderBase], tags=["Riders (Async)"])
+@app.get("/api/async/riders", response_model=PaginatedRidersResponse, tags=["Riders (Async)"])
 @cache_response("riders_async", expire=300)
-async def get_riders_async(db: AsyncSession = Depends(get_async_db)):
-    """获取所有车手列表 - 异步版本（推荐用于高并发）"""
-    result = await db.execute(select(Rider).order_by(Rider.rider_name))
+async def get_riders_async(page: int = 1, limit: int = 16, search: str = None, db: AsyncSession = Depends(get_async_db)):
+    """获取所有车手列表 - 异步版本（推荐用于高并发）
+    
+    参数:
+    - page: 页码，从 1 开始
+    - limit: 每页记录数，默认 16
+    - search: 可选，搜索车手姓名（模糊匹配）
+    """
+    # 构建查询条件
+    query = select(Rider)
+    count_query = select(func.count()).select_from(Rider)
+    
+    # 如果有搜索词，添加模糊查询条件
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(Rider.rider_name.ilike(search_pattern))
+        count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
+    
+    # 计算总记录数
+    count_result = await db.execute(count_query)
+    total = count_result.scalar() or 0
+    
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # 查询分页数据
+    result = await db.execute(
+        query.order_by(Rider.rider_name).offset(offset).limit(limit)
+    )
     riders = result.scalars().all()
-    return [rider.to_dict() for rider in riders]
+    
+    return {
+        "data": [rider.to_dict() for rider in riders],
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
 @app.get("/api/async/riders/{rider_id}", response_model=RiderStatsResponse, tags=["Riders (Async)"])
@@ -482,12 +534,18 @@ async def verify_email_async(verify_data: VerifyEmailRequest, db: AsyncSession =
 
 
 # ============ 原同步路由继续保持（向后兼容）============
-
+"""
+@app.get("/api/races", response_model=List[RaceBase], tags=["Races"])
+@cache_response("races", expire=600)
+def get_races(db: Session = Depends(get_db)):
+    # 获取所有赛事 (例如: 环法, 环意) - 同步版本
+    races = db.query(Race).order_by(Race.race_id).all()
+    return [race.to_dict() for race in races]
 
 @app.get("/api/races/{race_id}/editions", response_model=EditionsResponse, tags=["Races"])
 @cache_response("race_editions", expire=600)
 def get_editions(race_id: int, db: Session = Depends(get_db)):
-    """获取某一赛事的所有届数 (年份)"""
+    # 获取某一赛事的所有届数 (年份)
     race = db.query(Race).filter(Race.race_id == race_id).first()
     if not race:
         raise HTTPException(status_code=404, detail="Race not found")
@@ -499,7 +557,7 @@ def get_editions(race_id: int, db: Session = Depends(get_db)):
 @app.get("/api/editions/{edition_id}/stages", response_model=StagesResponse, tags=["Editions"])
 @cache_response("edition_stages", expire=1800)
 def get_stages(edition_id: int, db: Session = Depends(get_db)):
-    """获取某一届赛事的所有赛段"""
+    # 获取某一届赛事的所有赛段
     edition = db.query(Edition).filter(Edition.edition_id == edition_id).first()
     if not edition:
         raise HTTPException(status_code=404, detail="Edition not found")
@@ -512,15 +570,23 @@ def get_stages(edition_id: int, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/stages/{stage_id}/results", response_model=StageResultsResponse, tags=["Stages"])
+@app.get("/api/stages/{stage_id}/results", response_model=PaginatedStageResultsResponse, tags=["Stages"])
 @cache_response("stage_results", expire=3600)
-def get_stage_results(stage_id: int, db: Session = Depends(get_db)):
-    """获取某一赛段的完整成绩单 (按排名)"""
+def get_stage_results(stage_id: int, page: int = 1, limit: int = 20, db: Session = Depends(get_db)):
+    #获取某一赛段的完整成绩单 (按排名)
     stage = db.query(Stage).filter(Stage.stage_id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
     
-    results = db.query(StageResult).filter(StageResult.stage_id == stage.stage_id).order_by(StageResult.rank).all()
+    # 计算总记录数
+    total = db.query(func.count()).select_from(StageResult).filter(StageResult.stage_id == stage.stage_id).scalar() or 0
+    
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # 查询分页数据
+    results = db.query(StageResult).filter(StageResult.stage_id == stage.stage_id).order_by(StageResult.rank).offset(offset).limit(limit).all()
     
     # 手动构建包含关联信息的结果
     results_with_relations = []
@@ -536,21 +602,51 @@ def get_stage_results(stage_id: int, db: Session = Depends(get_db)):
             "team_name": res.team.team_name if res.team else None
         })
     
-    return {"stage_info": stage.to_dict(), "results": results_with_relations}
+    return {
+        "stage_info": stage.to_dict(),
+        "data": results_with_relations,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
-@app.get("/api/riders", response_model=List[RiderBase], tags=["Riders"])
+@app.get("/api/riders", response_model=PaginatedRidersResponse, tags=["Riders"])
 @cache_response("riders", expire=300)
-def get_riders(db: Session = Depends(get_db)):
-    """获取所有车手列表"""
-    riders = db.query(Rider).order_by(Rider.rider_name).all()
-    return [rider.to_dict() for rider in riders]
+def get_riders(page: int = 1, limit: int = 16, db: Session = Depends(get_db)):
+    # 获取所有车手列表
+    # 计算总记录数
+    total = db.query(func.count()).select_from(Rider).scalar() or 0
+    
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # 查询分页数据
+    riders = db.query(Rider).order_by(Rider.rider_name).offset(offset).limit(limit).all()
+    
+    return {
+        "data": [rider.to_dict() for rider in riders],
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
 @app.get("/api/riders/{rider_id}", response_model=RiderStatsResponse, tags=["Riders"])
 @cache_response("rider_detail", expire=600)
 def get_rider_detail(rider_id: int, db: Session = Depends(get_db)):
-    """获取单个车手的详细统计信息"""
+    # 获取单个车手的详细统计信息
     rider = db.query(Rider).filter(Rider.rider_id == rider_id).first()
     if not rider:
         raise HTTPException(status_code=404, detail="Rider not found")
@@ -579,7 +675,7 @@ def get_rider_detail(rider_id: int, db: Session = Depends(get_db)):
 @app.get("/api/riders/{rider_id}/races", response_model=RiderRacesResponse, tags=["Riders"])
 @cache_response("rider_races", expire=1800)
 def get_rider_races(rider_id: int, db: Session = Depends(get_db)):
-    """获取车手的所有参赛记录"""
+    # 获取车手的所有参赛记录
     rider = db.query(Rider).filter(Rider.rider_id == rider_id).first()
     if not rider:
         raise HTTPException(status_code=404, detail="Rider not found")
@@ -617,7 +713,7 @@ def get_rider_races(rider_id: int, db: Session = Depends(get_db)):
 @app.get("/api/riders/{rider_id}/wins", response_model=RiderWinsResponse, tags=["Riders"])
 @cache_response("rider_wins", expire=1800)
 def get_rider_wins(rider_id: int, db: Session = Depends(get_db)):
-    """获取车手的所有赛段冠军记录"""
+    # 获取车手的所有赛段冠军记录
     rider = db.query(Rider).filter(Rider.rider_id == rider_id).first()
     if not rider:
         raise HTTPException(status_code=404, detail="Rider not found")
@@ -649,7 +745,7 @@ def get_rider_wins(rider_id: int, db: Session = Depends(get_db)):
         })
     
     return {"rider": rider.to_dict(), "win_records": win_records}
-
+"""
 
 # ============ 缓存管理端点 ============
 
@@ -699,10 +795,10 @@ async def upload_avatar(file: UploadFile = File(...)):
 
 
 # ============ 用户认证端点 ============
-
+"""
 @app.post("/api/auth/register", response_model=RegisterResponse, tags=["Authentication"])
 def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
-    """用户注册 - 注册后需要验证邮箱"""
+    #用户注册 - 注册后需要验证邮箱
     # 验证邮箱格式（Pydantic 的 EmailStr 已经做了基本验证）
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if not re.match(email_pattern, user_data.email):
@@ -768,7 +864,7 @@ def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/verify-email", response_model=MessageResponse, tags=["Authentication"])
 def verify_email(verify_data: VerifyEmailRequest, db: Session = Depends(get_db)):
-    """验证邮箱"""
+    # 验证邮箱
     # 查找具有该验证令牌的用户
     user = db.query(User).filter(User.verification_token == verify_data.token).first()
     
@@ -789,6 +885,35 @@ def verify_email(verify_data: VerifyEmailRequest, db: Session = Depends(get_db))
     db.commit()
     
     return MessageResponse(message="邮箱验证成功！现在可以登录了。", success=True)
+
+
+@app.post("/api/auth/login", response_model=TokenResponse, tags=["Authentication"])
+def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
+    # 用户登录
+    # 查找用户
+    user = db.query(User).filter(User.email == login_data.email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    
+    # 检查邮箱是否已验证
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="请先验证您的邮箱后再登录")
+    
+    # 验证密码
+    if not verify_password(login_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    
+    # 生成 Token（sub 必须是字符串）
+    access_token = create_access_token(data={"sub": str(user.user_id)})
+    refresh_token = create_refresh_token(data={"sub": str(user.user_id)})
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": user
+    }
+"""
 
 
 @app.post("/api/auth/resend-verification", response_model=MessageResponse, tags=["Authentication"])
@@ -873,34 +998,6 @@ def reset_password(reset_data: ResetPasswordRequest, db: Session = Depends(get_d
     db.commit()
     
     return MessageResponse(message="密码重置成功！现在可以使用新密码登录了。", success=True)
-
-
-@app.post("/api/auth/login", response_model=TokenResponse, tags=["Authentication"])
-def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
-    """用户登录"""
-    # 查找用户
-    user = db.query(User).filter(User.email == login_data.email).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="邮箱或密码错误")
-    
-    # 检查邮箱是否已验证
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="请先验证您的邮箱后再登录")
-    
-    # 验证密码
-    if not verify_password(login_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="邮箱或密码错误")
-    
-    # 生成 Token（sub 必须是字符串）
-    access_token = create_access_token(data={"sub": str(user.user_id)})
-    refresh_token = create_refresh_token(data={"sub": str(user.user_id)})
-    
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": user
-    }
 
 
 @app.post("/api/auth/refresh", response_model=TokenResponse, tags=["Authentication"])

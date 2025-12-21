@@ -2,7 +2,7 @@
 // 1. 导入 Vue 核心和类型
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import type { Race, Edition, Stage, StageResult } from '@/interfaces/types'
+import type { Race, Edition, Stage, StageResult, PaginationMeta } from '@/interfaces/types'
 
 // 2. 导入 API 服务
 import { fetchRaces, fetchEditions, fetchStages, fetchResults } from '@/services/ApiServices'
@@ -18,6 +18,9 @@ const races = ref<Race[]>([])
 const editions = ref<Edition[]>([])
 const stages = ref<Stage[]>([])
 const results = ref<StageResult[]>([])
+const resultsPagination = ref<PaginationMeta | null>(null)
+const currentResultsPage = ref<number>(1)
+const resultsPageInputValue = ref<string>('')
 
 const selectedRace = ref<Race | null>(null)
 const selectedEdition = ref<Edition | null>(null)
@@ -133,18 +136,80 @@ const handleEditionSelect = async (edition: Edition) => {
   }
 }
 
-const handleStageSelect = async (stage: Stage) => {
+const handleStageSelect = async (stage: Stage, page: number = 1) => {
   selectedStage.value = stage
+  currentResultsPage.value = page
   isLoadingResults.value = true
   try {
-    const data = await fetchResults(stage.stage_id)
-    results.value = data.results
+    const data = await fetchResults(stage.stage_id, page, 20)
+    results.value = data.data
+    resultsPagination.value = data.pagination
   } catch (err) {
     console.error(err)
     error.value = '加载成绩失败'
   } finally {
     isLoadingResults.value = false
   }
+}
+
+// 分页控制函数
+const goToResultsPage = (page: number) => {
+  if (selectedStage.value && page >= 1 && page <= (resultsPagination.value?.total_pages || 1)) {
+    handleStageSelect(selectedStage.value, page)
+  }
+}
+
+const nextResultsPage = () => {
+  if (resultsPagination.value?.has_next) {
+    goToResultsPage(currentResultsPage.value + 1)
+  }
+}
+
+const prevResultsPage = () => {
+  if (resultsPagination.value?.has_prev) {
+    goToResultsPage(currentResultsPage.value - 1)
+  }
+}
+
+const getResultsPageNumbers = () => {
+  if (!resultsPagination.value) return []
+
+  const current = currentResultsPage.value
+  const total = resultsPagination.value.total_pages
+  const pages = []
+
+  const start = Math.max(1, current - 2)
+  const end = Math.min(total, current + 2)
+
+  for (let i = start; i <= end; i++) {
+    pages.push(i)
+  }
+
+  return pages
+}
+
+// 赛段成绩页码输入框跳转
+const handleResultsPageInputKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Enter') {
+    const page = parseInt(resultsPageInputValue.value, 10)
+    if (page < 1) {
+      goToResultsPage(1)
+    } else if (page > (resultsPagination.value?.total_pages || 1)) {
+      goToResultsPage(resultsPagination.value?.total_pages || 1)
+    } else if (!isNaN(page)) {
+      goToResultsPage(page)
+    }
+
+    resultsPageInputValue.value = ''
+  }
+}
+
+const handleResultsPageInputBlur = () => {
+  const page = parseInt(resultsPageInputValue.value, 10)
+  if (!isNaN(page) && page >= 1 && page <= (resultsPagination.value?.total_pages || 1)) {
+    goToResultsPage(page)
+  }
+  resultsPageInputValue.value = ''
 }
 
 // 5. 辅助函数 (Computed 和 Methods)
@@ -213,29 +278,86 @@ const selectedStageName = computed(() =>
 
     <!-- 成绩显示区（下方主体） -->
     <section class="results-section">
-      <h2 class="card-header">{{ selectedStageName }}</h2>
+      <h2 class="card-header">
+        {{ selectedStageName }}
+        <span v-if="resultsPagination" class="results-count">
+          （共 {{ resultsPagination.total }} 条成绩）
+        </span>
+      </h2>
       <div class="results-wrap">
         <div v-if="!selectedStage" class="placeholder">请先选择一个赛段</div>
         <div v-else-if="isLoadingResults" class="placeholder">加载成绩中...</div>
-        <table v-else class="results-table">
-          <thead class="sticky-header">
-            <tr>
-              <th>排名</th>
-              <th>车手</th>
-              <th>时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="result in results" :key="result.result_id">
-              <td class="rank">{{ result.rank }}</td>
-              <td class="rider">
-                <div class="rider-name">{{ result.rider_name }}</div>
-                <div class="team-name">{{ result.team_name }}</div>
-              </td>
-              <td class="time">{{ formatTime(result.time_in_seconds) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-else>
+          <table class="results-table">
+            <thead class="sticky-header">
+              <tr>
+                <th>排名</th>
+                <th>车手</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="result in results" :key="result.result_id">
+                <td class="rank">{{ result.rank }}</td>
+                <td class="rider">
+                  <div class="rider-name">{{ result.rider_name }}</div>
+                  <div class="team-name">{{ result.team_name }}</div>
+                </td>
+                <td class="time">{{ formatTime(result.time_in_seconds) }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 分页控件 -->
+          <div v-if="resultsPagination && resultsPagination.total_pages > 1" class="pagination">
+            <button
+              class="pagination-button"
+              :disabled="!resultsPagination.has_prev"
+              @click="prevResultsPage"
+            >
+              ← 上一页
+            </button>
+
+            <div class="pagination-info">
+              <span class="page-info-text">
+                第 {{ resultsPagination.page }} / {{ resultsPagination.total_pages }} 页
+              </span>
+              <span class="page-numbers">
+                <button
+                  v-for="page in getResultsPageNumbers()"
+                  :key="page"
+                  :class="['page-number', { active: page === currentResultsPage }]"
+                  @click="goToResultsPage(page)"
+                >
+                  {{ page }}
+                </button>
+              </span>
+
+              <div class="page-input-wrapper">
+                <span class="page-input-label">跳转到：</span>
+                <input
+                  v-model="resultsPageInputValue"
+                  type="number"
+                  min="1"
+                  :max="resultsPagination.total_pages"
+                  placeholder="页码"
+                  class="page-input"
+                  @keydown="handleResultsPageInputKeydown"
+                  @blur="handleResultsPageInputBlur"
+                />
+                <span class="page-input-unit">页</span>
+              </div>
+            </div>
+
+            <button
+              class="pagination-button"
+              :disabled="!resultsPagination.has_next"
+              @click="nextResultsPage"
+            >
+              下一页 →
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -348,9 +470,9 @@ const selectedStageName = computed(() =>
     0 2px 6px rgba(2, 6, 23, 0.04);
 }
 .results-wrap {
-  max-height: 65vh;
+  max-height: 75vh;
   overflow: auto;
-  padding: 0.5rem 0;
+  padding-bottom: 0.5rem;
 }
 
 @media (max-width: 767px) {
@@ -380,6 +502,7 @@ const selectedStageName = computed(() =>
 .card-header {
   border-bottom: 3px solid #fbbf24; /* yellow border */
   padding: 1rem;
+  margin-bottom: 0;
   font-size: 1.25rem;
   font-weight: 600;
   color: #1e3a8a; /* dark blue text */
@@ -469,5 +592,172 @@ const selectedStageName = computed(() =>
 .results-table .time {
   font-family: monospace;
   color: #475569; /* slate-600 */
+}
+
+/* 分页控件样式 */
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding: 1rem 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+.pagination-button {
+  padding: 0.6rem 1.2rem;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pagination-button:hover:not(:disabled) {
+  background: #fbbf24;
+  color: #1e3a8a;
+  border-color: #fbbf24;
+  transform: translateY(-1px);
+}
+
+.pagination-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.page-info-text {
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.page-numbers {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.page-number {
+  min-width: 36px;
+  height: 36px;
+  padding: 0.4rem;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.page-number:hover {
+  background: #fef3c7;
+  border-color: #fbbf24;
+}
+
+.page-number.active {
+  background: #fbbf24;
+  color: #1e3a8a;
+  border-color: #fbbf24;
+}
+
+.results-count {
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 500;
+  margin-left: 0.5rem;
+}
+
+/* 页码输入框样式 */
+.page-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  border-radius: 0.375rem;
+  border: 1px solid #e2e8f0;
+}
+
+.page-input-label {
+  font-size: 0.875rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.page-input {
+  width: 60px;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  text-align: center;
+  color: #1e293b;
+  transition: all 0.2s ease;
+}
+
+.page-input:focus {
+  outline: none;
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.1);
+}
+
+.page-input::placeholder {
+  color: #cbd5e1;
+}
+
+.page-input-unit {
+  font-size: 0.875rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .pagination {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .pagination-info {
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .page-info-text {
+    text-align: center;
+    width: 100%;
+  }
+
+  .page-numbers {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .page-input-wrapper {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .page-input {
+    width: 50px;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.4rem;
+  }
+
+  .pagination-button {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+  }
 }
 </style>

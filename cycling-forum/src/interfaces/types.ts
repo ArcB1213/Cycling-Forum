@@ -58,6 +58,34 @@ export interface RiderDetail {
   teams: Team[]
 }
 
+// --- 分页相关类型 ---
+
+/** * 分页元数据
+ */
+export interface PaginationMeta {
+  total: number
+  page: number
+  limit: number
+  total_pages: number
+  has_next: boolean
+  has_prev: boolean
+}
+
+/** * 分页车手响应
+ */
+export interface PaginatedRidersResponse {
+  data: Rider[]
+  pagination: PaginationMeta
+}
+
+/** * 分页赛段成绩响应
+ */
+export interface PaginatedStageResultsResponse {
+  stage_info: Stage
+  data: StageResult[]
+  pagination: PaginationMeta
+}
+
 // --- API 响应的特定类型 ---
 
 /** * 响应 /api/races/:id/editions
@@ -75,11 +103,19 @@ export interface ApiEditionStages {
   stages: Stage[]
 }
 
-/** * 响应 /api/stages/:id/results
+/** * 响应 /api/stages/:id/results (旧版，已废弃)
  */
 export interface ApiStageResults {
   stage_info: Stage
   results: StageResult[]
+}
+
+/** * 响应 /api/stages/:id/results (分页版本)
+ */
+export interface ApiStageResultsPaginated {
+  stage_info: Stage
+  data: StageResult[]
+  pagination: PaginationMeta
 }
 
 /** * 响应 /api/riders/:id

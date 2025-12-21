@@ -98,6 +98,31 @@ class RiderStatsResponse(BaseModel):
     stats: dict  # {"total_races": int, "stage_wins": int, "teams": List[TeamBase]}
 
 
+# ============ 分页模型 ============
+
+class PaginationMeta(BaseModel):
+    """分页元数据"""
+    total: int  # 总记录数
+    page: int  # 当前页码
+    limit: int  # 每页记录数
+    total_pages: int  # 总页数
+    has_next: bool  # 是否有下一页
+    has_prev: bool  # 是否有上一页
+
+
+class PaginatedRidersResponse(BaseModel):
+    """分页车手列表响应"""
+    data: List[RiderBase]
+    pagination: PaginationMeta
+
+
+class PaginatedStageResultsResponse(BaseModel):
+    """分页赛段成绩响应"""
+    stage_info: StageBase
+    data: List[StageResultWithRelations]
+    pagination: PaginationMeta
+
+
 class RaceRecord(BaseModel):
     """参赛记录"""
     result_id: int

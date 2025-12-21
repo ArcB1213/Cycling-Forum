@@ -3,8 +3,6 @@ import type {
   Race,
   ApiRaceEditions,
   ApiEditionStages,
-  ApiStageResults,
-  Rider,
   ApiRiderDetail,
   ApiRiderRaces,
   ApiRiderWins,
@@ -16,6 +14,8 @@ import type {
   MessageResponse,
   ForgotPasswordRequest,
   ResetPasswordRequest,
+  PaginatedRidersResponse,
+  PaginatedStageResultsResponse,
 } from '@/interfaces/types' // 导入类型
 
 // FastAPI 后端地址（uvicorn 默认端口 8000）
@@ -94,7 +94,7 @@ apiClient.interceptors.response.use(
  * 获取所有赛事
  */
 export const fetchRaces = async (): Promise<Race[]> => {
-  const response = await apiClient.get<Race[]>('/races')
+  const response = await apiClient.get<Race[]>('/async/races')
   return response.data
 }
 
@@ -103,7 +103,7 @@ export const fetchRaces = async (): Promise<Race[]> => {
  * @param raceId - 赛事的 ID
  */
 export const fetchEditions = async (raceId: number): Promise<ApiRaceEditions> => {
-  const response = await apiClient.get<ApiRaceEditions>(`/races/${raceId}/editions`)
+  const response = await apiClient.get<ApiRaceEditions>(`/async/races/${raceId}/editions`)
   return response.data
 }
 
@@ -112,24 +112,47 @@ export const fetchEditions = async (raceId: number): Promise<ApiRaceEditions> =>
  * @param editionId - 届数的 ID
  */
 export const fetchStages = async (editionId: number): Promise<ApiEditionStages> => {
-  const response = await apiClient.get<ApiEditionStages>(`/editions/${editionId}/stages`)
+  const response = await apiClient.get<ApiEditionStages>(`/async/editions/${editionId}/stages`)
   return response.data
 }
 
 /**
- * 获取某一赛段的完整成绩单
+ * 获取某一赛段的完整成绩单（分页）
  * @param stageId - 赛段的 ID
+ * @param page - 页码，默认为1
+ * @param limit - 每页数量，默认为20
  */
-export const fetchResults = async (stageId: number): Promise<ApiStageResults> => {
-  const response = await apiClient.get<ApiStageResults>(`/stages/${stageId}/results`)
+export const fetchResults = async (
+  stageId: number,
+  page: number = 1,
+  limit: number = 20,
+): Promise<PaginatedStageResultsResponse> => {
+  const response = await apiClient.get<PaginatedStageResultsResponse>(
+    `/async/stages/${stageId}/results`,
+    {
+      params: { page, limit },
+    },
+  )
   return response.data
 }
 
 /**
- * 获取所有车手列表
+ * 获取所有车手列表（分页）
+ * @param page - 页码，默认为1
+ * @param limit - 每页数量，默认为16
  */
-export const fetchRiders = async (): Promise<Rider[]> => {
-  const response = await apiClient.get<Rider[]>('/riders')
+export const fetchRiders = async (
+  page: number = 1,
+  limit: number = 18,
+  search?: string,
+): Promise<PaginatedRidersResponse> => {
+  const params: any = { page, limit }
+  if (search) {
+    params.search = search
+  }
+  const response = await apiClient.get<PaginatedRidersResponse>('/async/riders', {
+    params,
+  })
   return response.data
 }
 
@@ -138,7 +161,7 @@ export const fetchRiders = async (): Promise<Rider[]> => {
  * @param riderId - 车手的 ID
  */
 export const fetchRiderDetail = async (riderId: number): Promise<ApiRiderDetail> => {
-  const response = await apiClient.get<ApiRiderDetail>(`/riders/${riderId}`)
+  const response = await apiClient.get<ApiRiderDetail>(`/async/riders/${riderId}`)
   return response.data
 }
 
@@ -147,7 +170,7 @@ export const fetchRiderDetail = async (riderId: number): Promise<ApiRiderDetail>
  * @param riderId - 车手的 ID
  */
 export const fetchRiderRaces = async (riderId: number): Promise<ApiRiderRaces> => {
-  const response = await apiClient.get<ApiRiderRaces>(`/riders/${riderId}/races`)
+  const response = await apiClient.get<ApiRiderRaces>(`/async/riders/${riderId}/races`)
   return response.data
 }
 
@@ -156,7 +179,7 @@ export const fetchRiderRaces = async (riderId: number): Promise<ApiRiderRaces> =
  * @param riderId - 车手的 ID
  */
 export const fetchRiderWins = async (riderId: number): Promise<ApiRiderWins> => {
-  const response = await apiClient.get<ApiRiderWins>(`/riders/${riderId}/wins`)
+  const response = await apiClient.get<ApiRiderWins>(`/async/riders/${riderId}/wins`)
   return response.data
 }
 
@@ -167,7 +190,7 @@ export const fetchRiderWins = async (riderId: number): Promise<ApiRiderWins> => 
  * @param userData - 注册信息
  */
 export const register = async (userData: UserRegisterRequest): Promise<RegisterResponse> => {
-  const response = await apiClient.post<RegisterResponse>('/auth/register', userData)
+  const response = await apiClient.post<RegisterResponse>('/async/auth/register', userData)
   return response.data
 }
 
@@ -176,7 +199,7 @@ export const register = async (userData: UserRegisterRequest): Promise<RegisterR
  * @param token - 验证令牌
  */
 export const verifyEmail = async (token: string): Promise<MessageResponse> => {
-  const response = await apiClient.post<MessageResponse>('/auth/verify-email', { token })
+  const response = await apiClient.post<MessageResponse>('/async/auth/verify-email', { token })
   return response.data
 }
 
@@ -212,7 +235,7 @@ export const resetPassword = async (data: ResetPasswordRequest): Promise<Message
  * @param loginData - 登录信息
  */
 export const login = async (loginData: UserLoginRequest): Promise<TokenResponse> => {
-  const response = await apiClient.post<TokenResponse>('/auth/login', loginData)
+  const response = await apiClient.post<TokenResponse>('/async/auth/login', loginData)
   return response.data
 }
 
