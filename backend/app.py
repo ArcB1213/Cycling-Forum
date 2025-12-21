@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, selectinload
@@ -39,7 +39,7 @@ from cache import cache_response, invalidate_cache, get_cache_stats
 from auth import (
     get_password_hash, verify_password, 
     create_access_token, create_refresh_token, 
-    get_current_user, verify_refresh_token,
+    get_current_user, get_current_user_async, verify_refresh_token,
     generate_verification_token, generate_reset_password_token,
     get_verification_token_expiry, get_reset_password_token_expiry,
     is_token_expired
@@ -47,6 +47,10 @@ from auth import (
 
 # 导入邮件服务
 from email_service import send_verification_email, send_password_reset_email
+
+# 导入限流器
+from rate_limiter import limiter, rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,6 +78,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 配置限流器
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # 创建上传目录
 UPLOAD_DIR = Path("uploads/avatars")
@@ -401,8 +409,11 @@ async def get_rider_wins_async(rider_id: int, db: AsyncSession = Depends(get_asy
 # ============ 异步认证相关 API ============
 
 @app.post("/api/async/auth/register", response_model=RegisterResponse, tags=["Authentication (Async)"])
-async def register_user_async(user_data: UserRegister, db: AsyncSession = Depends(get_async_db)):
-    """用户注册 - 异步版本（推荐用于高并发）"""
+@limiter.limit("2/minute")
+async def register_user_async(request: Request, response: Response, user_data: UserRegister, db: AsyncSession = Depends(get_async_db)):
+    """用户注册 - 异步版本（推荐用于高并发）
+    限流：每个 IP 每分钟最多 2 次请求
+    """
     # 验证邮箱格式
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if not re.match(email_pattern, user_data.email):
@@ -473,8 +484,11 @@ async def register_user_async(user_data: UserRegister, db: AsyncSession = Depend
 
 
 @app.post("/api/async/auth/login", response_model=TokenResponse, tags=["Authentication (Async)"])
-async def login_user_async(login_data: UserLogin, db: AsyncSession = Depends(get_async_db)):
-    """用户登录 - 异步版本（推荐用于高并发）"""
+@limiter.limit("10/minute")
+async def login_user_async(request: Request, response: Response, login_data: UserLogin, db: AsyncSession = Depends(get_async_db)):
+    """用户登录 - 异步版本（推荐用于高并发）
+    限流：每个 IP 每分钟最多 10 次请求
+    """
     # 查找用户
     result = await db.execute(select(User).filter(User.email == login_data.email))
     user = result.scalar_one_or_none()
@@ -510,8 +524,11 @@ async def login_user_async(login_data: UserLogin, db: AsyncSession = Depends(get
 
 
 @app.post("/api/async/auth/verify-email", response_model=MessageResponse, tags=["Authentication (Async)"])
-async def verify_email_async(verify_data: VerifyEmailRequest, db: AsyncSession = Depends(get_async_db)):
-    """验证邮箱 - 异步版本"""
+@limiter.limit("5/minute")
+async def verify_email_async(request: Request, response: Response, verify_data: VerifyEmailRequest, db: AsyncSession = Depends(get_async_db)):
+    """验证邮箱 - 异步版本
+    限流：每个 IP 每分钟最多 5 次请求
+    """
     result = await db.execute(select(User).filter(User.verification_token == verify_data.token))
     user = result.scalar_one_or_none()
     
@@ -917,8 +934,11 @@ def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
 
 
 @app.post("/api/auth/resend-verification", response_model=MessageResponse, tags=["Authentication"])
-def resend_verification_email(email_data: EmailVerificationRequest, db: Session = Depends(get_db)):
-    """重新发送验证邮件"""
+@limiter.limit("3/hour")
+def resend_verification_email(request: Request, response: Response, email_data: EmailVerificationRequest, db: Session = Depends(get_db)):
+    """重新发送验证邮件
+    限流：每个 IP 每小时最多 3 次请求
+    """
     user = db.query(User).filter(User.email == email_data.email).first()
     
     if not user:
@@ -950,8 +970,11 @@ def resend_verification_email(email_data: EmailVerificationRequest, db: Session 
 
 
 @app.post("/api/auth/forgot-password", response_model=MessageResponse, tags=["Authentication"])
-def forgot_password(forgot_data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    """发送密码重置邮件"""
+@limiter.limit("10/hour")
+def forgot_password(request: Request, response: Response, forgot_data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """发送密码重置邮件
+    限流：每个 IP 每小时最多 10 次请求
+    """
     user = db.query(User).filter(User.email == forgot_data.email).first()
     
     # 为了安全，无论邮箱是否存在都返回相同的消息

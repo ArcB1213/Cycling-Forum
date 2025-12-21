@@ -1,0 +1,94 @@
+# ==================== 环境和配置 ====================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==================== 虚拟环境 ====================
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# ==================== IDE 编辑器 ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.sublime-project
+.sublime-workspace
+*.iml
+
+# ==================== 用户上传文件 ====================
+uploads/
+uploads/avatars/*
+!uploads/avatars/.gitkeep
+temp/
+tmp/
+
+# ==================== 数据库文件 ====================
+*.sqlite
+*.sqlite3
+*.db
+database.db
+
+# ==================== 测试和覆盖率 ====================
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+
+# ==================== 系统文件 ====================
+Thumbs.db
+.AppleDouble
+.LSOverride
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+desktop.ini
+
+# ==================== 日志文件 ====================
+*.log
+logs/
+*.log.*
+
+# ==================== 其他 ====================
+.cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+node_modules/
+dist/

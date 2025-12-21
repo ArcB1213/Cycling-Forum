@@ -17,6 +17,9 @@ python-multipart>=0.0.6
 # 缓存
 redis>=5.0
 
+# 限流
+slowapi>=0.1.9
+
 # 数据处理
 requests>=2.28
 pandas>=1.5

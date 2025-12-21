@@ -5,29 +5,36 @@ JWT 认证工具模块
 from datetime import datetime, timedelta
 from typing import Optional
 import secrets
+import os
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from models.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from models.database import get_db, get_async_db
 from models.models import User
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 # 密码加密上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# OAuth2 密码流
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# OAuth2 密码流 - 使用异步登录端点
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/async/auth/login")
 
-# JWT 配置
-SECRET_KEY = "cycling_forum_secret_key_change_in_production"  # 生产环境应使用环境变量
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+# JWT 配置 - 从环境变量读取
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cycling_forum_secret_key_change_in_production")
+ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 # 邮箱验证配置
-VERIFICATION_TOKEN_EXPIRE_HOURS = 24
-RESET_PASSWORD_TOKEN_EXPIRE_HOURS = 1
+VERIFICATION_TOKEN_EXPIRE_HOURS = int(os.getenv("VERIFICATION_TOKEN_EXPIRE_HOURS", "24"))
+RESET_PASSWORD_TOKEN_EXPIRE_HOURS = int(os.getenv("RESET_PASSWORD_TOKEN_EXPIRE_HOURS", "1"))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -98,6 +105,51 @@ async def get_current_user(
         raise credentials_exception
     
     user = db.query(User).filter(User.user_id == user_id).first()
+    if user is None:
+        print(f"[DEBUG] User not found with id: {user_id}")
+        raise credentials_exception
+    
+    print(f"[DEBUG] User authenticated: {user.nickname}")
+    return user
+
+
+async def get_current_user_async(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_async_db)) -> User:
+    """
+    获取当前登录用户（异步版本）
+    用作依赖项保护需要认证的异步路由
+    """
+    print(f"[DEBUG] Received token: {token[:20]}..." if token else "[DEBUG] No token received")
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无法验证凭据",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        token_type: str = payload.get("type")
+        print(f"[DEBUG] Decoded payload - user_id: {user_id_str}, type: {token_type}")
+        
+        if user_id_str is None or token_type != "access":
+            print(f"[DEBUG] Invalid token - user_id: {user_id_str}, type: {token_type}")
+            raise credentials_exception
+        
+        # 将字符串转换为整数
+        user_id = int(user_id_str)
+            
+    except JWTError as e:
+        print(f"[DEBUG] JWT decode error: {e}")
+        raise credentials_exception
+    except ValueError:
+        print(f"[DEBUG] Invalid user_id format")
+        raise credentials_exception
+    
+    # 异步查询用户
+    result = await db.execute(select(User).filter(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    
     if user is None:
         print(f"[DEBUG] User not found with id: {user_id}")
         raise credentials_exception
