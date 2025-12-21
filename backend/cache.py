@@ -5,6 +5,8 @@ import redis
 import json
 from functools import wraps
 from typing import Optional, Callable, Any, TypeVar, cast
+import asyncio
+import inspect
 
 ResponseT = TypeVar('ResponseT')
 
@@ -49,9 +51,9 @@ def generate_cache_key(prefix: str, *args, **kwargs) -> str:
     return ":".join(key_parts)
 
 
-def cache_response(prefix: str, expire: int = 300) -> Callable[[Callable[..., ResponseT]], Callable[..., ResponseT]]:
+def cache_response(prefix: str, expire: int = 300):
     """
-    缓存装饰器 - 用于 FastAPI 路由函数
+    缓存装饰器 - 同时支持同步和异步函数
     
     :param prefix: 缓存键前缀
     :param expire: 过期时间（秒），默认 5 分钟
@@ -60,43 +62,86 @@ def cache_response(prefix: str, expire: int = 300) -> Callable[[Callable[..., Re
     @cache_response("riders", expire=600)
     def get_riders(db: Session = Depends(get_db)):
         ...
+    
+    @cache_response("riders_async", expire=600)
+    async def get_riders_async(db: AsyncSession = Depends(get_async_db)):
+        ...
     """
-    def decorator(func: Callable[..., ResponseT]) -> Callable[..., ResponseT]:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> ResponseT:
-            # 提取路径参数生成缓存键
-            # 过滤掉 Session 对象，只使用路径参数
-            path_params: dict[str, Any] = {k: v for k, v in kwargs.items() if not k == 'db'}
-            cache_key = generate_cache_key(prefix, **path_params)
+    def decorator(func):
+        # 检查函数是否是异步的
+        if asyncio.iscoroutinefunction(func):
+            # 异步版本
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                # 提取路径参数生成缓存键（过滤掉 db 参数）
+                path_params = {k: v for k, v in kwargs.items() if k not in ['db']}
+                cache_key = generate_cache_key(prefix, **path_params)
+                
+                try:
+                    # 尝试从缓存获取
+                    cached_data = redis_client.get(cache_key)
+                    if cached_data:
+                        print(f"[Cache HIT] {cache_key}")
+                        return json.loads(cached_data)
+                    else:
+                        print(f"[Cache MISS] {cache_key}")
+                except Exception as e:
+                    print(f"[Cache] 读取失败: {e}")
+                
+                # 缓存未命中，执行原函数
+                result = await func(*args, **kwargs)
+                
+                try:
+                    # 将结果存入缓存
+                    redis_client.setex(
+                        cache_key,
+                        expire,
+                        json.dumps(result, ensure_ascii=False, default=str)
+                    )
+                    print(f"[Cache SET] {cache_key} (expire: {expire}s)")
+                except Exception as e:
+                    print(f"[Cache] 写入失败: {e}")
+                
+                return result
             
-            try:
-                # 尝试从缓存获取
-                cached_data = cast(Optional[str], redis_client.get(cache_key))
-                if cached_data:
-                    print(f"[Cache HIT] {cache_key}")
-                    return json.loads(cached_data)  # type: ignore[return-value]
-                else:
-                    print(f"[Cache MISS] {cache_key}")
-            except Exception as e:
-                print(f"[Cache] 读取失败: {e}")
+            return async_wrapper
+        else:
+            # 同步版本
+            @wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                # 提取路径参数生成缓存键
+                path_params = {k: v for k, v in kwargs.items() if k not in ['db']}
+                cache_key = generate_cache_key(prefix, **path_params)
+                
+                try:
+                    # 尝试从缓存获取
+                    cached_data = redis_client.get(cache_key)
+                    if cached_data:
+                        print(f"[Cache HIT] {cache_key}")
+                        return json.loads(cached_data)
+                    else:
+                        print(f"[Cache MISS] {cache_key}")
+                except Exception as e:
+                    print(f"[Cache] 读取失败: {e}")
+                
+                # 缓存未命中，执行原函数
+                result = func(*args, **kwargs)
+                
+                try:
+                    # 将结果存入缓存
+                    redis_client.setex(
+                        cache_key,
+                        expire,
+                        json.dumps(result, ensure_ascii=False, default=str)
+                    )
+                    print(f"[Cache SET] {cache_key} (expire: {expire}s)")
+                except Exception as e:
+                    print(f"[Cache] 写入失败: {e}")
+                
+                return result
             
-            # 缓存未命中，执行原函数
-            result: ResponseT = func(*args, **kwargs)
-            
-            try:
-                # 将结果存入缓存
-                redis_client.setex(
-                    cache_key,
-                    expire,
-                    json.dumps(result, ensure_ascii=False, default=str)
-                )
-                print(f"[Cache SET] {cache_key} (expire: {expire}s)")
-            except Exception as e:
-                print(f"[Cache] 写入失败: {e}")
-            
-            return result
-        
-        return wrapper  # type: ignore[return-value]
+            return sync_wrapper
+    
     return decorator
 
 

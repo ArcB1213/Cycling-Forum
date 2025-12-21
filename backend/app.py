@@ -1,16 +1,20 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import List
+from contextlib import asynccontextmanager
 import re
 import os
 import shutil
 import uuid
+import asyncio
 from pathlib import Path
 
-# 导入数据库会话
-from models.database import get_db
+# 导入数据库会话（同步和异步）
+from models.database import get_db, get_async_db
 
 # 导入模型
 from models.models import Race, Edition, Stage, StageResult, Rider, Team, User
@@ -43,11 +47,22 @@ from auth import (
 # 导入邮件服务
 from email_service import send_verification_email, send_password_reset_email
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时
+    print("🚀 应用启动...")
+    yield
+    # 关闭时
+    print("🛑 应用关闭，清理 Redis 连接...")
+
+
 # 创建 FastAPI 应用实例
 app = FastAPI(
     title="三大环赛数据 API",
     description="提供环法、环意、环西等赛事数据的 RESTful API",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # 配置 CORS - 允许所有来源访问
@@ -75,12 +90,398 @@ def index():
     return {"message": "欢迎来到三大环赛数据 API！", "docs": "/docs"}
 
 
+# ============ 同步 API 路由（保留向后兼容）============
+
 @app.get("/api/races", response_model=List[RaceBase], tags=["Races"])
 @cache_response("races", expire=600)
 def get_races(db: Session = Depends(get_db)):
-    """获取所有赛事 (例如: 环法, 环意)"""
+    """获取所有赛事 (例如: 环法, 环意) - 同步版本"""
     races = db.query(Race).order_by(Race.race_id).all()
     return [race.to_dict() for race in races]
+
+
+# ============ 异步 API 路由（高并发优化）============
+
+@app.get("/api/async/races", response_model=List[RaceBase], tags=["Races (Async)"])
+@cache_response("races_async", expire=600)
+async def get_races_async(db: AsyncSession = Depends(get_async_db)):
+    """获取所有赛事 (例如: 环法, 环意) - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Race).order_by(Race.race_id))
+    races = result.scalars().all()
+    return [race.to_dict() for race in races]
+
+
+@app.get("/api/async/races/{race_id}/editions", response_model=EditionsResponse, tags=["Races (Async)"])
+@cache_response("race_editions_async", expire=600)
+async def get_editions_async(race_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取某一赛事的所有届数 (年份) - 异步版本（推荐用于高并发）"""
+    # 查询 Race
+    result = await db.execute(select(Race).filter(Race.race_id == race_id))
+    race = result.scalar_one_or_none()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found")
+    
+    # 查询 Editions
+    result = await db.execute(
+        select(Edition)
+        .filter(Edition.race_id == race.race_id)
+        .order_by(Edition.year.desc())
+    )
+    editions = result.scalars().all()
+    return {"race": race.race_name, "editions": [e.to_dict() for e in editions]}
+
+
+@app.get("/api/async/editions/{edition_id}/stages", response_model=StagesResponse, tags=["Editions (Async)"])
+@cache_response("edition_stages_async", expire=1800)
+async def get_stages_async(edition_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取某一届赛事的所有赛段 - 异步版本（推荐用于高并发）"""
+    # 预加载 race 关联，避免懒加载问题
+    result = await db.execute(
+        select(Edition)
+        .options(selectinload(Edition.race))
+        .filter(Edition.edition_id == edition_id)
+    )
+    edition = result.scalar_one_or_none()
+    if not edition:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    
+    # 查询 Stages
+    result = await db.execute(
+        select(Stage)
+        .filter(Stage.edition_id == edition.edition_id)
+        .order_by(Stage.stage_number)
+    )
+    stages = result.scalars().all()
+    
+    return {
+        "edition_year": edition.year,
+        "race_name": edition.race.race_name if edition.race else None,
+        "stages": [s.to_dict() for s in stages]
+    }
+
+
+@app.get("/api/async/stages/{stage_id}/results", response_model=StageResultsResponse, tags=["Stages (Async)"])
+@cache_response("stage_results_async", expire=3600)
+async def get_stage_results_async(stage_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取某一赛段的完整成绩单 (按排名) - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Stage).filter(Stage.stage_id == stage_id))
+    stage = result.scalar_one_or_none()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    
+    # 使用 selectinload 预加载关联数据，避免 N+1 查询问题
+    result = await db.execute(
+        select(StageResult)
+        .options(
+            selectinload(StageResult.rider),
+            selectinload(StageResult.team)
+        )
+        .filter(StageResult.stage_id == stage.stage_id)
+        .order_by(StageResult.rank)
+    )
+    results = result.scalars().all()
+    
+    # 构建包含关联信息的结果
+    results_with_relations = []
+    for res in results:
+        results_with_relations.append({
+            "result_id": res.result_id,
+            "stage_id": res.stage_id,
+            "rider_id": res.rider_id,
+            "team_id": res.team_id,
+            "rank": res.rank,
+            "time_in_seconds": res.time_in_seconds,
+            "rider_name": res.rider.rider_name if res.rider else None,
+            "team_name": res.team.team_name if res.team else None
+        })
+    
+    return {"stage_info": stage.to_dict(), "results": results_with_relations}
+
+
+# ============ 异步骑手相关 API ============
+
+@app.get("/api/async/riders", response_model=List[RiderBase], tags=["Riders (Async)"])
+@cache_response("riders_async", expire=300)
+async def get_riders_async(db: AsyncSession = Depends(get_async_db)):
+    """获取所有车手列表 - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Rider).order_by(Rider.rider_name))
+    riders = result.scalars().all()
+    return [rider.to_dict() for rider in riders]
+
+
+@app.get("/api/async/riders/{rider_id}", response_model=RiderStatsResponse, tags=["Riders (Async)"])
+@cache_response("rider_detail_async", expire=600)
+async def get_rider_detail_async(rider_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取单个车手的详细统计信息 - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Rider).filter(Rider.rider_id == rider_id))
+    rider = result.scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    # 统计参赛场次（不同赛段数量）
+    result = await db.execute(
+        select(StageResult.stage_id)
+        .filter(StageResult.rider_id == rider.rider_id)
+        .distinct()
+    )
+    total_races = len(result.all())
+    
+    # 统计赛段冠军数（rank=1）
+    result = await db.execute(
+        select(StageResult)
+        .filter(StageResult.rider_id == rider.rider_id, StageResult.rank == 1)
+    )
+    stage_wins = len(result.all())
+    
+    # 获取效力过的所有车队（去重）
+    result = await db.execute(
+        select(StageResult.team_id)
+        .filter(StageResult.rider_id == rider.rider_id)
+        .distinct()
+    )
+    team_ids = [tid[0] for tid in result.all()]
+    
+    # 批量查询车队信息
+    teams = []
+    if team_ids:
+        result = await db.execute(
+            select(Team).filter(Team.team_id.in_(team_ids))
+        )
+        teams = [t.to_dict() for t in result.scalars().all()]
+    
+    return {
+        "rider": rider.to_dict(),
+        "stats": {
+            "total_races": total_races,
+            "stage_wins": stage_wins,
+            "teams": teams
+        }
+    }
+
+
+@app.get("/api/async/riders/{rider_id}/races", response_model=RiderRacesResponse, tags=["Riders (Async)"])
+@cache_response("rider_races_async", expire=1800)
+async def get_rider_races_async(rider_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取车手的所有参赛记录 - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Rider).filter(Rider.rider_id == rider_id))
+    rider = result.scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    # 预加载所有关联数据，避免 N+1 查询
+    result = await db.execute(
+        select(StageResult)
+        .options(
+            selectinload(StageResult.stage).selectinload(Stage.edition).selectinload(Edition.race),
+            selectinload(StageResult.team)
+        )
+        .filter(StageResult.rider_id == rider.rider_id)
+        .join(Stage, StageResult.stage_id == Stage.stage_id)
+        .join(Edition, Stage.edition_id == Edition.edition_id)
+        .order_by(Edition.year.desc(), Stage.stage_number)
+    )
+    results = result.scalars().all()
+    
+    race_records = []
+    for result_item in results:
+        stage = result_item.stage
+        edition = stage.edition
+        race = edition.race
+        team = result_item.team
+        
+        race_records.append({
+            "result_id": result_item.result_id,
+            "race_name": race.race_name,
+            "year": edition.year,
+            "stage_number": float(stage.stage_number),
+            "stage_route": stage.stage_route,
+            "rank": result_item.rank,
+            "time_in_seconds": result_item.time_in_seconds,
+            "team_name": team.team_name if team else "Unknown"
+        })
+    
+    return {"rider": rider.to_dict(), "race_records": race_records}
+
+
+@app.get("/api/async/riders/{rider_id}/wins", response_model=RiderWinsResponse, tags=["Riders (Async)"])
+@cache_response("rider_wins_async", expire=1800)
+async def get_rider_wins_async(rider_id: int, db: AsyncSession = Depends(get_async_db)):
+    """获取车手的所有赛段冠军记录 - 异步版本（推荐用于高并发）"""
+    result = await db.execute(select(Rider).filter(Rider.rider_id == rider_id))
+    rider = result.scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    # 预加载所有关联数据
+    result = await db.execute(
+        select(StageResult)
+        .options(
+            selectinload(StageResult.stage).selectinload(Stage.edition).selectinload(Edition.race),
+            selectinload(StageResult.team)
+        )
+        .filter(StageResult.rider_id == rider.rider_id, StageResult.rank == 1)
+        .join(Stage, StageResult.stage_id == Stage.stage_id)
+        .join(Edition, Stage.edition_id == Edition.edition_id)
+        .order_by(Edition.year.desc(), Stage.stage_number)
+    )
+    wins = result.scalars().all()
+    
+    win_records = []
+    for win in wins:
+        stage = win.stage
+        edition = stage.edition
+        race = edition.race
+        team = win.team
+        
+        win_records.append({
+            "result_id": win.result_id,
+            "race_name": race.race_name,
+            "year": edition.year,
+            "stage_number": float(stage.stage_number),
+            "stage_route": stage.stage_route,
+            "time_in_seconds": win.time_in_seconds,
+            "team_name": team.team_name if team else "Unknown"
+        })
+    
+    return {"rider": rider.to_dict(), "win_records": win_records}
+
+
+# ============ 异步认证相关 API ============
+
+@app.post("/api/async/auth/register", response_model=RegisterResponse, tags=["Authentication (Async)"])
+async def register_user_async(user_data: UserRegister, db: AsyncSession = Depends(get_async_db)):
+    """用户注册 - 异步版本（推荐用于高并发）"""
+    # 验证邮箱格式
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, user_data.email):
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    
+    # 检查邮箱是否已存在
+    result = await db.execute(select(User).filter(User.email == user_data.email))
+    existing_user = result.scalar_one_or_none()
+    if existing_user:
+        if not existing_user.is_verified and is_token_expired(existing_user.verification_token_expires_at):
+            await db.delete(existing_user)
+            await db.commit()
+        else:
+            raise HTTPException(status_code=400, detail="该邮箱已被注册")
+    
+    # 检查昵称是否已存在
+    result = await db.execute(select(User).filter(User.nickname == user_data.nickname))
+    existing_nickname = result.scalar_one_or_none()
+    if existing_nickname:
+        if not existing_nickname.is_verified and is_token_expired(existing_nickname.verification_token_expires_at):
+            await db.delete(existing_nickname)
+            await db.commit()
+        else:
+            raise HTTPException(status_code=400, detail="该昵称已被使用")
+    
+    # 生成验证令牌
+    verification_token = generate_verification_token()
+    verification_expires = get_verification_token_expiry()
+    
+    # 在线程池中执行密码哈希（CPU密集型操作）
+    loop = asyncio.get_event_loop()
+    hashed_password = await loop.run_in_executor(None, get_password_hash, user_data.password)
+    
+    # 创建新用户
+    new_user = User(
+        email=user_data.email,
+        nickname=user_data.nickname,
+        hashed_password=hashed_password,
+        avatar=user_data.avatar or "default",
+        is_verified=False,
+        verification_token=verification_token,
+        verification_token_expires_at=verification_expires
+    )
+    
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    
+    # 发送验证邮件（在线程池中执行，避免阻塞）
+    email_sent = await loop.run_in_executor(
+        None,
+        send_verification_email,
+        new_user.email,
+        new_user.nickname,
+        verification_token
+    )
+    
+    if not email_sent:
+        await db.delete(new_user)
+        await db.commit()
+        raise HTTPException(status_code=500, detail="发送验证邮件失败，请稍后重试")
+    
+    return RegisterResponse(
+        message="注册成功！请查收邮件并点击链接验证您的邮箱。",
+        email=new_user.email,
+        requires_verification=True
+    )
+
+
+@app.post("/api/async/auth/login", response_model=TokenResponse, tags=["Authentication (Async)"])
+async def login_user_async(login_data: UserLogin, db: AsyncSession = Depends(get_async_db)):
+    """用户登录 - 异步版本（推荐用于高并发）"""
+    # 查找用户
+    result = await db.execute(select(User).filter(User.email == login_data.email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    
+    # 检查邮箱是否已验证
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="请先验证您的邮箱后再登录")
+    
+    # 在线程池中验证密码（CPU密集型操作）
+    loop = asyncio.get_event_loop()
+    password_valid = await loop.run_in_executor(
+        None,
+        verify_password,
+        login_data.password,
+        user.hashed_password
+    )
+    
+    if not password_valid:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    
+    # 生成 Token
+    access_token = create_access_token(data={"sub": str(user.user_id)})
+    refresh_token = create_refresh_token(data={"sub": str(user.user_id)})
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": user
+    }
+
+
+@app.post("/api/async/auth/verify-email", response_model=MessageResponse, tags=["Authentication (Async)"])
+async def verify_email_async(verify_data: VerifyEmailRequest, db: AsyncSession = Depends(get_async_db)):
+    """验证邮箱 - 异步版本"""
+    result = await db.execute(select(User).filter(User.verification_token == verify_data.token))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="无效的验证链接")
+    
+    if user.is_verified:
+        return MessageResponse(message="邮箱已验证，无需重复验证", success=True)
+    
+    if is_token_expired(user.verification_token_expires_at):
+        raise HTTPException(status_code=400, detail="验证链接已过期，请重新发送验证邮件")
+    
+    # 验证成功
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_token_expires_at = None
+    await db.commit()
+    
+    return MessageResponse(message="邮箱验证成功！现在可以登录了。", success=True)
+
+
+# ============ 原同步路由继续保持（向后兼容）============
 
 
 @app.get("/api/races/{race_id}/editions", response_model=EditionsResponse, tags=["Races"])
