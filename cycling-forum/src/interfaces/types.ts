@@ -146,7 +146,8 @@ export interface RiderRaceRecord {
  */
 export interface ApiRiderRaces {
   rider: Rider
-  race_records: RiderRaceRecord[]
+  data: RiderRaceRecord[]
+  pagination: PaginationMeta
 }
 
 /** * 车手冠军记录
@@ -286,4 +287,62 @@ export interface ForumPost {
   title: string
   author: string
   content: string
+}
+// --- 车手评分相关类型 ---
+
+/**
+ * 评分基础信息
+ */
+export interface RatingBase {
+  score: number // 1-5分
+  comment?: string // 可选评价内容
+}
+
+/**
+ * 评分创建请求
+ */
+export interface RatingCreate extends RatingBase {
+  rider_id: number
+}
+
+/**
+ * 评分响应（包含 ID 和时间）
+ */
+export interface Rating extends RatingBase {
+  rating_id: number
+  rider_id: number
+  user_id: number
+  created_at: string // ISO 日期字符串
+  updated_at: string
+  user_nickname?: string
+}
+
+/**
+ * 车手评分统计
+ */
+export interface RiderStats {
+  stat_id: number
+  rider_id: number
+  total_rating_count: number // 评价总数
+  average_score: number // 平均分
+  updated_at: string
+}
+
+/**
+ * 车手详细信息（包含评分）
+ */
+export interface RiderDetailWithRatings {
+  rider_id: number
+  rider_name: string
+  stats: RiderStats | null
+  user_rating: Rating | null // 当前用户的评分
+  recent_ratings: Rating[] // 最近的评价列表
+}
+
+/**
+ * 分页评价响应
+ */
+export interface PaginatedRatingsResponse {
+  data: Rating[]
+  pagination: PaginationMeta
 }

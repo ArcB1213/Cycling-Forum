@@ -16,6 +16,11 @@ import type {
   ResetPasswordRequest,
   PaginatedRidersResponse,
   PaginatedStageResultsResponse,
+  Rating,
+  RatingCreate,
+  RiderStats,
+  RiderDetailWithRatings,
+  PaginatedRatingsResponse,
 } from '@/interfaces/types' // 导入类型
 
 // FastAPI 后端地址（uvicorn 默认端口 8000）
@@ -59,7 +64,7 @@ apiClient.interceptors.response.use(
         if (refreshToken) {
           // 尝试刷新 Token
           const response = await axios.post<TokenResponse>(
-            'http://127.0.0.1:8000/api/auth/refresh',
+            'http://127.0.0.1:8000/api/async/auth/refresh',
             { refresh_token: refreshToken },
           )
 
@@ -166,11 +171,19 @@ export const fetchRiderDetail = async (riderId: number): Promise<ApiRiderDetail>
 }
 
 /**
- * 获取车手的所有参赛记录
+ * 获取车手的所有参赛记录（分页）
  * @param riderId - 车手的 ID
+ * @param page - 页码
+ * @param limit - 每页记录数
  */
-export const fetchRiderRaces = async (riderId: number): Promise<ApiRiderRaces> => {
-  const response = await apiClient.get<ApiRiderRaces>(`/async/riders/${riderId}/races`)
+export const fetchRiderRaces = async (
+  riderId: number,
+  page = 1,
+  limit = 20,
+): Promise<ApiRiderRaces> => {
+  const response = await apiClient.get<ApiRiderRaces>(`/async/riders/${riderId}/races`, {
+    params: { page, limit },
+  })
   return response.data
 }
 
@@ -208,7 +221,9 @@ export const verifyEmail = async (token: string): Promise<MessageResponse> => {
  * @param email - 邮箱地址
  */
 export const resendVerificationEmail = async (email: string): Promise<MessageResponse> => {
-  const response = await apiClient.post<MessageResponse>('/auth/resend-verification', { email })
+  const response = await apiClient.post<MessageResponse>('/async/auth/resend-verification', {
+    email,
+  })
   return response.data
 }
 
@@ -217,7 +232,7 @@ export const resendVerificationEmail = async (email: string): Promise<MessageRes
  * @param data - 忘记密码请求
  */
 export const forgotPassword = async (data: ForgotPasswordRequest): Promise<MessageResponse> => {
-  const response = await apiClient.post<MessageResponse>('/auth/forgot-password', data)
+  const response = await apiClient.post<MessageResponse>('/async/auth/forgot-password', data)
   return response.data
 }
 
@@ -349,6 +364,79 @@ export const getAvatarUrl = (avatar?: string): string => {
   return avatar
 }
 
+// --- 评分相关 API ---
+
+/**
+ * 提交或更新车手评分
+ */
+export const submitRating = async (riderId: number, ratingData: RatingCreate): Promise<Rating> => {
+  const response = await apiClient.post<Rating>(`/riders/${riderId}/ratings`, ratingData)
+  return response.data
+}
+
+/**
+ * 获取车手评分统计
+ */
+export const fetchRiderRatingStats = async (riderId: number): Promise<RiderStats> => {
+  const response = await apiClient.get<RiderStats>(`/riders/${riderId}/rating-stats`)
+  return response.data
+}
+
+/**
+ * 获取车手评价列表（分页）
+ */
+export const fetchRiderRatings = async (
+  riderId: number,
+  page = 1,
+  limit = 10,
+): Promise<PaginatedRatingsResponse> => {
+  const response = await apiClient.get<PaginatedRatingsResponse>(`/riders/${riderId}/ratings`, {
+    params: { page, limit },
+  })
+  return response.data
+}
+
+/**
+ * 获取当前用户对车手的评分
+ */
+export const fetchMyRating = async (riderId: number): Promise<Rating | null> => {
+  const response = await apiClient.get<Rating | null>(`/riders/${riderId}/my-rating`)
+  return response.data
+}
+
+/**
+ * 获取车手详细信息（包含评分）
+ */
+export const fetchRiderDetailWithRatings = async (
+  riderId: number,
+): Promise<RiderDetailWithRatings> => {
+  const response = await apiClient.get<RiderDetailWithRatings>(
+    `/riders/${riderId}/detail-with-ratings`,
+  )
+  return response.data
+}
+
+/**
+ * 删除车手评分
+ */
+export const deleteRating = async (riderId: number): Promise<MessageResponse> => {
+  const response = await apiClient.delete<MessageResponse>(`/riders/${riderId}/ratings`)
+  return response.data
+}
+
+/**
+ * 获取当前用户的所有评价
+ */
+export const fetchMyAllRatings = async (
+  page = 1,
+  limit = 10,
+): Promise<PaginatedRatingsResponse> => {
+  const response = await apiClient.get<PaginatedRatingsResponse>('/auth/my-ratings', {
+    params: { page, limit },
+  })
+  return response.data
+}
+
 // 默认导出所有 API 方法
 export default {
   fetchRaces,
@@ -374,4 +462,11 @@ export default {
   isAuthenticated,
   logout,
   getAvatarUrl,
+  submitRating,
+  fetchRiderRatingStats,
+  fetchRiderRatings,
+  fetchMyRating,
+  fetchRiderDetailWithRatings,
+  deleteRating,
+  fetchMyAllRatings,
 }

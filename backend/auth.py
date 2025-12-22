@@ -25,6 +25,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2 密码流 - 使用异步登录端点
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/async/auth/login")
+# 可选的 OAuth2 scheme，不自动报错
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/async/auth/login", auto_error=False)
 
 # JWT 配置 - 从环境变量读取
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cycling_forum_secret_key_change_in_production")
@@ -68,13 +70,10 @@ def create_refresh_token(data: dict) -> str:
     return encoded_jwt
 
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme), 
-    db: Session = Depends(get_db)
-) -> User:
+def verify_token_payload(token: str) -> int:
     """
-    从 JWT Token 中获取当前用户
-    用作依赖项保护需要认证的路由
+    验证 Token 并返回 user_id
+    如果验证失败，抛出 HTTPException
     """
     print(f"[DEBUG] Received token: {token[:20]}..." if token else "[DEBUG] No token received")
     
@@ -95,7 +94,7 @@ async def get_current_user(
             raise credentials_exception
         
         # 将字符串转换为整数
-        user_id = int(user_id_str)
+        return int(user_id_str)
             
     except JWTError as e:
         print(f"[DEBUG] JWT decode error: {e}")
@@ -103,11 +102,26 @@ async def get_current_user(
     except ValueError:
         print(f"[DEBUG] Invalid user_id format")
         raise credentials_exception
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), 
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    从 JWT Token 中获取当前用户
+    用作依赖项保护需要认证的路由
+    """
+    user_id = verify_token_payload(token)
     
     user = db.query(User).filter(User.user_id == user_id).first()
     if user is None:
         print(f"[DEBUG] User not found with id: {user_id}")
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无法验证凭据",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     print(f"[DEBUG] User authenticated: {user.nickname}")
     return user
@@ -118,33 +132,7 @@ async def get_current_user_async(token: str = Depends(oauth2_scheme), db: AsyncS
     获取当前登录用户（异步版本）
     用作依赖项保护需要认证的异步路由
     """
-    print(f"[DEBUG] Received token: {token[:20]}..." if token else "[DEBUG] No token received")
-    
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="无法验证凭据",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id_str = payload.get("sub")
-        token_type: str = payload.get("type")
-        print(f"[DEBUG] Decoded payload - user_id: {user_id_str}, type: {token_type}")
-        
-        if user_id_str is None or token_type != "access":
-            print(f"[DEBUG] Invalid token - user_id: {user_id_str}, type: {token_type}")
-            raise credentials_exception
-        
-        # 将字符串转换为整数
-        user_id = int(user_id_str)
-            
-    except JWTError as e:
-        print(f"[DEBUG] JWT decode error: {e}")
-        raise credentials_exception
-    except ValueError:
-        print(f"[DEBUG] Invalid user_id format")
-        raise credentials_exception
+    user_id = verify_token_payload(token)
     
     # 异步查询用户
     result = await db.execute(select(User).filter(User.user_id == user_id))
@@ -152,9 +140,40 @@ async def get_current_user_async(token: str = Depends(oauth2_scheme), db: AsyncS
     
     if user is None:
         print(f"[DEBUG] User not found with id: {user_id}")
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无法验证凭据",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     print(f"[DEBUG] User authenticated: {user.nickname}")
+    return user
+
+
+async def get_optional_current_user_async(token: Optional[str] = Depends(oauth2_scheme_optional), db: AsyncSession = Depends(get_async_db)) -> Optional[User]:
+    """
+    获取当前登录用户（可选，异步版本）
+    如果未提供 Token 或 Token 无效，返回 None 而不是报错
+    """
+    if not token:
+        return None
+    
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        token_type: str = payload.get("type")
+        
+        if user_id_str is None or token_type != "access":
+            return None
+        
+        user_id = int(user_id_str)
+            
+    except (JWTError, ValueError):
+        return None
+    
+    # 异步查询用户
+    result = await db.execute(select(User).filter(User.user_id == user_id))
+    user = result.scalar_one_or_none()
     return user
 
 

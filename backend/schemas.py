@@ -136,9 +136,10 @@ class RaceRecord(BaseModel):
 
 
 class RiderRacesResponse(BaseModel):
-    """车手参赛记录响应"""
+    """车手参赛记录响应（分页）"""
     rider: RiderBase
-    race_records: List[RaceRecord]
+    data: List[RaceRecord]
+    pagination: PaginationMeta
 
 
 class WinRecord(BaseModel):
@@ -252,3 +253,59 @@ class UpdatePasswordRequest(BaseModel):
     """修改密码请求"""
     old_password: str = Field(..., description="当前密码")
     new_password: str = Field(..., min_length=6, description="新密码")
+
+# ============ 车手评分相关模型 ============
+
+class RatingBase(BaseModel):
+    """评分基础模型"""
+    score: int = Field(..., ge=1, le=5, description="评分：1-5分")
+    comment: Optional[str] = Field(None, max_length=500, description="评价内容（可选）")
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RatingCreate(RatingBase):
+    """创建评分请求"""
+    rider_id: int = Field(..., description="车手ID")
+
+
+class RatingResponse(RatingBase):
+    """评分响应模型"""
+    rating_id: int
+    rider_id: int
+    user_id: int
+    created_at: datetime
+    updated_at: datetime
+    user_nickname: Optional[str] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiderRatingStatsResponse(BaseModel):
+    """车手评分统计模型"""
+    stat_id: int
+    rider_id: int
+    total_rating_count: int = Field(..., description="评价总数")
+    average_score: float = Field(..., description="平均评分")
+    updated_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiderDetailWithRatingsResponse(BaseModel):
+    """包含评分的车手详细信息"""
+    rider_id: int
+    rider_name: str
+    stats: Optional[RiderRatingStatsResponse] = None
+    user_rating: Optional[RatingResponse] = None  # 当前用户的评分
+    recent_ratings: List[RatingResponse] = Field(default_factory=list, description="最近的评价列表")
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedRatingsResponse(BaseModel):
+    """分页评价响应"""
+    data: List[RatingResponse]
+    pagination: dict
+    
+    model_config = ConfigDict(from_attributes=True)
