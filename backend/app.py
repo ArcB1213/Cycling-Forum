@@ -350,35 +350,27 @@ async def get_rider_detail_async(rider_id: int, db: AsyncSession = Depends(get_a
         raise HTTPException(status_code=404, detail="Rider not found")
     
     # 统计参赛场次（不同赛段数量）
-    result = await db.execute(
-        select(StageResult.stage_id)
+    count_result = await db.execute(
+        select(func.count(distinct(StageResult.stage_id)))
         .filter(StageResult.rider_id == rider.rider_id)
-        .distinct()
     )
-    total_races = len(result.all())
+    total_races = count_result.scalar() or 0
     
     # 统计赛段冠军数（rank=1）
-    result = await db.execute(
-        select(StageResult)
+    wins_result = await db.execute(
+        select(func.count(StageResult.result_id))
         .filter(StageResult.rider_id == rider.rider_id, StageResult.rank == 1)
     )
-    stage_wins = len(result.all())
+    stage_wins = wins_result.scalar() or 0
     
     # 获取效力过的所有车队（去重）
-    result = await db.execute(
-        select(StageResult.team_id)
+    teams_result = await db.execute(
+        select(Team)
+        .join(StageResult, StageResult.team_id == Team.team_id)
         .filter(StageResult.rider_id == rider.rider_id)
         .distinct()
     )
-    team_ids = [tid[0] for tid in result.all()]
-    
-    # 批量查询车队信息
-    teams = []
-    if team_ids:
-        result = await db.execute(
-            select(Team).filter(Team.team_id.in_(team_ids))
-        )
-        teams = [t.to_dict() for t in result.scalars().all()]
+    teams = [t.to_dict() for t in teams_result.scalars().all()]
     
     return {
         "rider": rider.to_dict(),
@@ -971,87 +963,126 @@ async def submit_rating(
     
     限流：每个 IP 每分钟最多 5 次请求
     """
-    # 验证车手是否存在
-    result = await db.execute(select(Rider).filter(Rider.rider_id == rider_id))
-    rider = result.scalar_one_or_none()
-    if not rider:
-        raise HTTPException(status_code=404, detail="车手不存在")
+    try:
+        # 优化：一次查询同时验证车手存在和获取现有评分
+        from sqlalchemy import and_
+        
+        result = await db.execute(
+            select(Rider, Rating)
+            .outerjoin(Rating, and_(
+                Rating.rider_id == Rider.rider_id,
+                Rating.user_id == current_user.user_id
+            ))
+            .filter(Rider.rider_id == rider_id)
+        )
+        row = result.first()
+        
+        if not row or not row[0]:
+            raise HTTPException(status_code=404, detail=f"车手不存在 (rider_id={rider_id})")
+        
+        rider, existing_rating = row[0], row[1]
+        
+        if existing_rating:
+            # ========== 更新已有评分 ==========
+            old_score = existing_rating.score
+            score_diff = rating_data.score - old_score
+            
+            existing_rating.score = rating_data.score
+            existing_rating.comment = rating_data.comment
+            existing_rating.updated_at = datetime.utcnow()
+            
+            # 使用 MySQL UPSERT 原子更新统计表
+            # 如果 RiderStats 不存在则插入（score_diff 作为初始值），存在则更新
+            await db.execute(
+                text("""
+                    INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
+                    VALUES (:rider_id, 1, :score_diff, 1, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        total_score_sum = total_score_sum + :score_diff,
+                        version = version + 1,
+                        updated_at = NOW()
+                """),
+                {"rider_id": rider_id, "score_diff": score_diff}
+            )
+            
+            await db.commit()
+            await db.refresh(existing_rating)
+            existing_rating.user = current_user
+            
+            # 清除该车手的评分相关缓存，确保前端获取最新数据（异步版本，避免阻塞）
+            from cache import invalidate_cache_async
+            await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
+            await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
+            
+            return existing_rating.to_dict()
+        else:
+            # ========== 新增评分 ==========
+            new_rating = Rating(
+                rider_id=rider_id,
+                user_id=current_user.user_id,
+                score=rating_data.score,
+                comment=rating_data.comment
+            )
+            db.add(new_rating)
+            
+            # 使用 MySQL UPSERT 原子更新统计表
+            # 如果 RiderStats 不存在则插入，存在则累加
+            await db.execute(
+                text("""
+                    INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
+                    VALUES (:rider_id, 1, :score, 1, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        total_rating_count = total_rating_count + 1,
+                        total_score_sum = total_score_sum + :score,
+                        version = version + 1,
+                        updated_at = NOW()
+                """),
+                {"rider_id": rider_id, "score": rating_data.score}
+            )
+            
+            await db.commit()
+            await db.refresh(new_rating)
+            new_rating.user = current_user
+            
+            # 清除该车手的评分相关缓存，确保前端获取最新数据（异步版本，避免阻塞）
+            from cache import invalidate_cache_async
+            await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
+            await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
+            
+            return new_rating.to_dict()
     
-    # 查询该用户对该车手的历史评分
-    result = await db.execute(
-        select(Rating).filter(
-            Rating.rider_id == rider_id,
-            Rating.user_id == current_user.user_id
+    except IntegrityError as e:
+        await db.rollback()
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        # 检查是否是重复键错误
+        if "Duplicate" in error_msg or "duplicate" in error_msg.lower():
+            raise HTTPException(
+                status_code=409, 
+                detail=f"评分冲突: 用户 {current_user.user_id} 对车手 {rider_id} 的评分已存在 (并发竞态条件)"
+            )
+        raise HTTPException(
+            status_code=500, 
+            detail=f"数据库完整性错误: {error_msg}"
         )
-    )
-    existing_rating = result.scalar_one_or_none()
-    
-    if existing_rating:
-        # ========== 更新已有评分 ==========
-        old_score = existing_rating.score
-        score_diff = rating_data.score - old_score
-        
-        existing_rating.score = rating_data.score
-        existing_rating.comment = rating_data.comment
-        existing_rating.updated_at = datetime.utcnow()
-        
-        # 使用 MySQL UPSERT 原子更新统计表
-        # 如果 RiderStats 不存在则插入（score_diff 作为初始值），存在则更新
-        await db.execute(
-            text("""
-                INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
-                VALUES (:rider_id, 1, :score_diff, 1, NOW())
-                ON DUPLICATE KEY UPDATE
-                    total_score_sum = total_score_sum + :score_diff,
-                    version = version + 1,
-                    updated_at = NOW()
-            """),
-            {"rider_id": rider_id, "score_diff": score_diff}
+    except OperationalError as e:
+        await db.rollback()
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        raise HTTPException(
+            status_code=503, 
+            detail=f"数据库操作错误 (可能是连接问题): {error_msg}"
         )
-        
-        await db.commit()
-        await db.refresh(existing_rating)
-        existing_rating.user = current_user
-        
-        # 清除该车手的评分相关缓存，确保前端获取最新数据
-        invalidate_cache(f"rider_rating_stats:{rider_id}:*")
-        invalidate_cache(f"rider_detail_with_ratings:{rider_id}:*")
-        
-        return existing_rating.to_dict()
-    else:
-        # ========== 新增评分 ==========
-        new_rating = Rating(
-            rider_id=rider_id,
-            user_id=current_user.user_id,
-            score=rating_data.score,
-            comment=rating_data.comment
+    except HTTPException:
+        # 重新抛出 HTTPException，不要包装它
+        raise
+    except Exception as e:
+        await db.rollback()
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR] submit_rating 异常: {str(e)}\n{tb}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"提交评分时发生未知错误: {type(e).__name__}: {str(e)}"
         )
-        db.add(new_rating)
-        
-        # 使用 MySQL UPSERT 原子更新统计表
-        # 如果 RiderStats 不存在则插入，存在则累加
-        await db.execute(
-            text("""
-                INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
-                VALUES (:rider_id, 1, :score, 1, NOW())
-                ON DUPLICATE KEY UPDATE
-                    total_rating_count = total_rating_count + 1,
-                    total_score_sum = total_score_sum + :score,
-                    version = version + 1,
-                    updated_at = NOW()
-            """),
-            {"rider_id": rider_id, "score": rating_data.score}
-        )
-        
-        await db.commit()
-        await db.refresh(new_rating)
-        new_rating.user = current_user
-        
-        # 清除该车手的评分相关缓存，确保前端获取最新数据
-        invalidate_cache(f"rider_rating_stats:{rider_id}:*")
-        invalidate_cache(f"rider_detail_with_ratings:{rider_id}:*")
-        
-        return new_rating.to_dict()
 
 
 @app.get("/api/riders/{rider_id}/rating-stats", response_model=RiderRatingStatsResponse, tags=["Ratings"])
@@ -1238,8 +1269,8 @@ async def delete_rating(
     await db.commit()
     
     # 清除该车手的评分相关缓存
-    invalidate_cache(f"rider_rating_stats:{rider_id}:*")
-    invalidate_cache(f"rider_detail_with_ratings:{rider_id}:*")
+    await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
+    await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
     
     return MessageResponse(message="评分已删除", success=True)
 
@@ -1329,10 +1360,13 @@ async def get_my_all_ratings(
     total_pages = (total + limit - 1) // limit
     offset = (page - 1) * limit
     
-    # 查询评价数据（预加载车手信息）
+    # 查询评价数据（预加载车手和用户信息，避免 N+1 查询）
     result = await db.execute(
         select(Rating)
-        .options(selectinload(Rating.rider))
+        .options(
+            selectinload(Rating.rider),
+            selectinload(Rating.user)  # 添加用户预加载
+        )
         .filter(Rating.user_id == current_user.user_id)
         .order_by(Rating.created_at.desc())
         .offset(offset)

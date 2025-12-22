@@ -78,12 +78,12 @@ const handleLogout = () => {
       </div>
 
       <!-- 论坛入口卡片 -->
-      <div class="entry-card forum-card" @click="navigateToForum">
+      <!-- <div class="entry-card forum-card" @click="navigateToForum">
         <div class="card-icon">🗣️</div>
         <h2 class="card-title">论坛</h2>
         <p class="card-description">参与讨论，分享观点，连接环法自行车赛爱好者社区</p>
         <div class="card-arrow">→</div>
-      </div>
+      </div> -->
     </div>
 
     <footer class="landing-footer">
@@ -196,7 +196,7 @@ const handleLogout = () => {
 
 .cards-container {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 2rem;
   max-width: 1200px;
   width: 100%;

@@ -123,6 +123,7 @@ def cache_response(prefix: str, expire: int = 300):
 
 # 其余功能保持不变...
 def invalidate_cache(pattern: str) -> int:
+    """同步缓存失效（用于同步代码）"""
     if not ENABLE_CACHE: return 0
     try:
         keys = cast(list[Any], redis_client.keys(pattern))
@@ -131,6 +132,22 @@ def invalidate_cache(pattern: str) -> int:
             return len(keys)
         return 0
     except Exception: return 0
+
+
+async def invalidate_cache_async(pattern: str) -> int:
+    """异步缓存失效（用于异步代码，避免阻塞事件循环）"""
+    if not ENABLE_CACHE:
+        return 0
+    try:
+        redis = await get_async_redis()
+        keys = await redis.keys(pattern)
+        if keys:
+            await redis.delete(*keys)
+            return len(keys)
+        return 0
+    except Exception as e:
+        print(f"[Cache] 异步失效缓存异常: {e}")
+        return 0
 
 
 def get_cache_stats() -> dict[str, Any]:

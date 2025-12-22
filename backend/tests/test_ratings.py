@@ -9,7 +9,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 BASE_URL = "http://127.0.0.1:8000"
-NUM_USERS = 10  # 模拟并发用户数
+NUM_USERS = 400  # 模拟并发用户数
 RIDER_ID = 1    # 测试的目标车手 ID
 
 # 重新设计：使用直接数据库操作来创建测试用户
@@ -25,8 +25,8 @@ async def create_test_users(num_users):
     users = []
     async with AsyncSessionLocal() as db:
         for i in range(num_users):
-            email = f"stress_v5_{i}@test.com"
-            nickname = f"stress_v5_{i}"
+            email = f"stress_{i}@test.com"
+            nickname = f"stress_{i}"
             
             # 检查是否存在
             result = await db.execute(select(User).filter(User.email == email))

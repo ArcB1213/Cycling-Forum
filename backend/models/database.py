@@ -21,9 +21,12 @@ MYSQL_PORT = os.getenv('MYSQL_PORT', '3306')
 MYSQL_USER = os.getenv('MYSQL_USER', 'root')
 MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', '')
 MYSQL_DATABASE = os.getenv('MYSQL_DATABASE', 'cycling_stats')
-DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', '10'))
-DB_MAX_OVERFLOW = int(os.getenv('DB_MAX_OVERFLOW', '20'))
-DB_POOL_RECYCLE = int(os.getenv('DB_POOL_RECYCLE', '3600'))
+
+# 连接池配置（提高高并发性能）
+DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', '20'))          # 增加基础连接池大小（原10）
+DB_MAX_OVERFLOW = int(os.getenv('DB_MAX_OVERFLOW', '40'))    # 增加溢出连接数（原20）
+DB_POOL_RECYCLE = int(os.getenv('DB_POOL_RECYCLE', '3600'))  # 连接回收时间（秒）
+DB_POOL_TIMEOUT = int(os.getenv('DB_POOL_TIMEOUT', '30'))    # 获取连接的超时时间
 
 # URL 编码密码（处理特殊字符如 @, /, ? 等）
 encoded_password = quote_plus(MYSQL_PASSWORD)
@@ -43,6 +46,7 @@ engine = create_engine(
     pool_size=DB_POOL_SIZE,
     max_overflow=DB_MAX_OVERFLOW,
     pool_recycle=DB_POOL_RECYCLE,
+    pool_timeout=DB_POOL_TIMEOUT,  # 添加超时配置
     pool_pre_ping=True,
     echo=False  # 设为 True 可查看 SQL 日志
 )
@@ -86,6 +90,7 @@ async_engine = create_async_engine(
     pool_size=DB_POOL_SIZE,
     max_overflow=DB_MAX_OVERFLOW,
     pool_recycle=DB_POOL_RECYCLE,
+    pool_timeout=DB_POOL_TIMEOUT,  # 添加超时配置
     pool_pre_ping=True,
     echo=False  # 设为 True 可查看 SQL 日志
 )
