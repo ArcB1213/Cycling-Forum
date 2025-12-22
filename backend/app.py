@@ -14,7 +14,7 @@ import asyncio
 from pathlib import Path
 
 # 导入数据库会话（同步和异步）
-from models.database import get_db, get_async_db
+from models.database import get_db, get_async_db,close_db_connections
 
 # 导入模型
 from models.models import Race, Edition, Stage, StageResult, Rider, Team, User
@@ -52,14 +52,38 @@ from email_service import send_verification_email, send_password_reset_email
 from rate_limiter import limiter, rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+# 导入缓存相关
+from cache import close_async_redis
+from cache_warmup import preload_all_caches
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     print("🚀 应用启动...")
+    
+    # 初始化异步 Redis 连接
+    try:
+        from cache import get_async_redis
+        await get_async_redis()
+        print("✓ Redis 异步客户端初始化完成")
+    except Exception as e:
+        print(f"✗ Redis 异步客户端初始化失败: {e}")
+    
+    # 缓存预热
+    try:
+        async for db in get_async_db():
+            await preload_all_caches(db)
+            break
+    except Exception as e:
+        print(f"⚠️  缓存预热失败: {e}")
+    
     yield
+    
     # 关闭时
     print("🛑 应用关闭，清理 Redis 连接...")
+    await close_async_redis()
+    await close_db_connections()
 
 
 # 创建 FastAPI 应用实例
@@ -594,41 +618,6 @@ async def verify_email_async(request: Request, response: Response, verify_data: 
 
 
 # ============ 原同步路由继续保持（向后兼容）============
-"""
-@app.get("/api/races", response_model=List[RaceBase], tags=["Races"])
-@cache_response("races", expire=600)
-def get_races(db: Session = Depends(get_db)):
-    # 获取所有赛事 (例如: 环法, 环意) - 同步版本
-    races = db.query(Race).order_by(Race.race_id).all()
-    return [race.to_dict() for race in races]
-
-@app.get("/api/races/{race_id}/editions", response_model=EditionsResponse, tags=["Races"])
-@cache_response("race_editions", expire=600)
-def get_editions(race_id: int, db: Session = Depends(get_db)):
-    # 获取某一赛事的所有届数 (年份)
-    race = db.query(Race).filter(Race.race_id == race_id).first()
-    if not race:
-        raise HTTPException(status_code=404, detail="Race not found")
-    
-    editions = db.query(Edition).filter(Edition.race_id == race.race_id).order_by(Edition.year.desc()).all()
-    return {"race": race.race_name, "editions": [e.to_dict() for e in editions]}
-
-
-@app.get("/api/editions/{edition_id}/stages", response_model=StagesResponse, tags=["Editions"])
-@cache_response("edition_stages", expire=1800)
-def get_stages(edition_id: int, db: Session = Depends(get_db)):
-    # 获取某一届赛事的所有赛段
-    edition = db.query(Edition).filter(Edition.edition_id == edition_id).first()
-    if not edition:
-        raise HTTPException(status_code=404, detail="Edition not found")
-    
-    stages = db.query(Stage).filter(Stage.edition_id == edition.edition_id).order_by(Stage.stage_number).all()
-    return {
-        "edition_year": edition.year,
-        "race_name": edition.race.race_name,
-        "stages": [s.to_dict() for s in stages]
-    }
-
 
 @app.get("/api/stages/{stage_id}/results", response_model=PaginatedStageResultsResponse, tags=["Stages"])
 @cache_response("stage_results", expire=3600)
@@ -675,6 +664,71 @@ def get_stage_results(stage_id: int, page: int = 1, limit: int = 20, db: Session
         }
     }
 
+@app.get("/api/riders/{rider_id}", response_model=RiderStatsResponse, tags=["Riders"])
+@cache_response("rider_detail", expire=600)
+def get_rider_detail(rider_id: int, db: Session = Depends(get_db)):
+    # 获取单个车手的详细统计信息
+    rider = db.query(Rider).filter(Rider.rider_id == rider_id).first()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    # 统计参赛场次（不同赛段数量）
+    total_races = db.query(StageResult.stage_id).filter(StageResult.rider_id == rider.rider_id).distinct().count()
+    
+    # 统计赛段冠军数（rank=1）
+    stage_wins = db.query(StageResult).filter(StageResult.rider_id == rider.rider_id, StageResult.rank == 1).count()
+    
+    # 获取效力过的所有车队（去重）
+    team_ids = db.query(StageResult.team_id).filter(StageResult.rider_id == rider.rider_id).distinct().all()
+    teams = [db.query(Team).filter(Team.team_id == tid[0]).first() for tid in team_ids]
+    teams = [t.to_dict() for t in teams if t]  # 转换为字典并过滤 None
+    
+    return {
+        "rider": rider.to_dict(),
+        "stats": {
+            "total_races": total_races,
+            "stage_wins": stage_wins,
+            "teams": teams
+        }
+    }  
+
+"""
+@app.get("/api/races", response_model=List[RaceBase], tags=["Races"])
+@cache_response("races", expire=600)
+def get_races(db: Session = Depends(get_db)):
+    # 获取所有赛事 (例如: 环法, 环意) - 同步版本
+    races = db.query(Race).order_by(Race.race_id).all()
+    return [race.to_dict() for race in races]
+
+@app.get("/api/races/{race_id}/editions", response_model=EditionsResponse, tags=["Races"])
+@cache_response("race_editions", expire=600)
+def get_editions(race_id: int, db: Session = Depends(get_db)):
+    # 获取某一赛事的所有届数 (年份)
+    race = db.query(Race).filter(Race.race_id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found")
+    
+    editions = db.query(Edition).filter(Edition.race_id == race.race_id).order_by(Edition.year.desc()).all()
+    return {"race": race.race_name, "editions": [e.to_dict() for e in editions]}
+
+
+@app.get("/api/editions/{edition_id}/stages", response_model=StagesResponse, tags=["Editions"])
+@cache_response("edition_stages", expire=1800)
+def get_stages(edition_id: int, db: Session = Depends(get_db)):
+    # 获取某一届赛事的所有赛段
+    edition = db.query(Edition).filter(Edition.edition_id == edition_id).first()
+    if not edition:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    
+    stages = db.query(Stage).filter(Stage.edition_id == edition.edition_id).order_by(Stage.stage_number).all()
+    return {
+        "edition_year": edition.year,
+        "race_name": edition.race.race_name,
+        "stages": [s.to_dict() for s in stages]
+    }
+
+
+
 
 @app.get("/api/riders", response_model=PaginatedRidersResponse, tags=["Riders"])
 @cache_response("riders", expire=300)
@@ -703,33 +757,7 @@ def get_riders(page: int = 1, limit: int = 16, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/riders/{rider_id}", response_model=RiderStatsResponse, tags=["Riders"])
-@cache_response("rider_detail", expire=600)
-def get_rider_detail(rider_id: int, db: Session = Depends(get_db)):
-    # 获取单个车手的详细统计信息
-    rider = db.query(Rider).filter(Rider.rider_id == rider_id).first()
-    if not rider:
-        raise HTTPException(status_code=404, detail="Rider not found")
-    
-    # 统计参赛场次（不同赛段数量）
-    total_races = db.query(StageResult.stage_id).filter(StageResult.rider_id == rider.rider_id).distinct().count()
-    
-    # 统计赛段冠军数（rank=1）
-    stage_wins = db.query(StageResult).filter(StageResult.rider_id == rider.rider_id, StageResult.rank == 1).count()
-    
-    # 获取效力过的所有车队（去重）
-    team_ids = db.query(StageResult.team_id).filter(StageResult.rider_id == rider.rider_id).distinct().all()
-    teams = [db.query(Team).filter(Team.team_id == tid[0]).first() for tid in team_ids]
-    teams = [t.to_dict() for t in teams if t]  # 转换为字典并过滤 None
-    
-    return {
-        "rider": rider.to_dict(),
-        "stats": {
-            "total_races": total_races,
-            "stage_wins": stage_wins,
-            "teams": teams
-        }
-    }   
+ 
 
 
 @app.get("/api/riders/{rider_id}/races", response_model=RiderRacesResponse, tags=["Riders"])

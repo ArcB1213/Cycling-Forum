@@ -118,3 +118,20 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+async def close_db_connections():
+    """
+    关闭数据库连接池（引擎）
+    应该在 FastAPI 应用关闭 (Shutdown) 时调用
+    """
+    print("[MySQL] 正在关闭连接池...")
+    try:
+        # 1. 关闭异步引擎 (最重要，解决 Event Loop closed 报错)
+        await async_engine.dispose()
+        
+        # 2. 关闭同步引擎 (虽然同步引擎通常不依赖 Event Loop，但显式关闭是好习惯)
+        engine.dispose()
+        
+        print("[MySQL] 连接池已关闭 ✓")
+    except Exception as e:
+        print(f"[MySQL] 关闭连接池时发生错误: {e}")

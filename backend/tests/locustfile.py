@@ -57,15 +57,16 @@ class CyclingAPIUser(HttpUser):
         self.client.get(f"/api/async/riders/{rider_id}/wins", name="[异步] 获取骑手冠军记录")
     
     # ============ 同步 API 对比（可选）============
-    @task(1)
-    def get_races_sync(self):
-        """测试同步获取赛事列表（对比基准）"""
-        self.client.get("/api/races", name="[同步] 获取赛事列表")
-    
-    @task(1)
-    def get_stage_results_sync(self):
-        """测试同步获取赛段结果（对比基准）"""
-        self.client.get("/api/stages/1/results", name="[同步] 获取赛段结果")
+    # @task(1)
+    # def get_stage_results_sync(self):
+    #     """测试同步获取赛段结果（对比基准）"""
+    #     self.client.get("/api/stages/1/results", name="[同步] 获取赛段结果")
+
+    # @task(2)
+    # def get_rider_detail_sync(self):
+    #     """测试同步获取骑手详情"""
+    #     rider_id = random.randint(1, 100)
+    #     self.client.get(f"/api/riders/{rider_id}", name="[同步] 获取骑手详情")
     
     def on_start(self):
         """用户启动时执行"""
