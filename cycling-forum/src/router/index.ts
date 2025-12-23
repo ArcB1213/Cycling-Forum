@@ -61,6 +61,18 @@ const router = createRouter({
       meta: { requiresAuth: true }, // 需要登录
     },
     {
+      path: '/forum/create',
+      name: 'create-post',
+      component: () => import('../views/CreatePostView.vue'),
+      meta: { requiresAuth: true }, // 需要登录
+    },
+    {
+      path: '/forum/post/:postId',
+      name: 'post-detail',
+      component: () => import('../views/PostDetailView.vue'),
+      meta: { requiresAuth: true }, // 需要登录
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: () => import('../views/UserProfileView.vue'),

@@ -84,45 +84,110 @@
         </div>
       </div>
 
-      <!-- 我的评价 -->
+      <!-- 我的活动 (选项卡) -->
       <div class="action-card">
-        <h3>我的车手评价</h3>
-        <div v-if="isLoadingRatings" class="loading-state">加载中...</div>
-        <div v-else-if="!myRatings || myRatings.data.length === 0" class="empty-state">
-          暂无评价记录
-        </div>
-        <div v-else class="ratings-list">
-          <div
-            v-for="rating in myRatings.data"
-            :key="rating.rating_id"
-            class="rating-card"
-            @click="goToRider(rating.rider_id)"
+        <div class="tabs-header">
+          <button
+            :class="['tab-button', { active: activeTab === 'ratings' }]"
+            @click="switchTab('ratings')"
           >
-            <div class="rating-card-header">
-              <span class="rider-name">{{ (rating as any).rider_name || '未知车手' }}</span>
-              <span class="rating-stars">{{ getStarRating(rating.score) }}</span>
-            </div>
-            <p class="rating-comment">{{ rating.comment || '无文字评价' }}</p>
-            <span class="rating-time">{{ formatDate(rating.created_at) }}</span>
-          </div>
+            🏆 我的评价
+          </button>
+          <button
+            :class="['tab-button', { active: activeTab === 'posts' }]"
+            @click="switchTab('posts')"
+          >
+            📝 我的帖子
+          </button>
+        </div>
 
-          <!-- 分页 -->
-          <div v-if="myRatings.pagination.total_pages > 1" class="pagination">
-            <button
-              :disabled="!myRatings.pagination.has_prev"
-              @click="loadMyRatings(myRatings.pagination.page - 1)"
+        <!-- 评价列表 -->
+        <div v-show="activeTab === 'ratings'" class="tab-content">
+          <div v-if="isLoadingRatings" class="loading-state">加载中...</div>
+          <div v-else-if="!myRatings || myRatings.data.length === 0" class="empty-state">
+            暂无评价记录
+          </div>
+          <div v-else class="ratings-list">
+            <div
+              v-for="rating in myRatings.data"
+              :key="rating.rating_id"
+              class="rating-card"
+              @click="goToRider(rating.rider_id)"
             >
-              上一页
-            </button>
-            <span
-              >第 {{ myRatings.pagination.page }} / {{ myRatings.pagination.total_pages }} 页</span
+              <div class="rating-card-header">
+                <span class="rider-name">{{ (rating as any).rider_name || '未知车手' }}</span>
+                <span class="rating-stars">{{ getStarRating(rating.score) }}</span>
+              </div>
+              <p class="rating-comment">{{ rating.comment || '无文字评价' }}</p>
+              <span class="rating-time">{{ formatDate(rating.created_at) }}</span>
+            </div>
+
+            <!-- 分页 -->
+            <div v-if="myRatings.pagination.total_pages > 1" class="pagination">
+              <button
+                :disabled="!myRatings.pagination.has_prev"
+                @click="loadMyRatings(myRatings.pagination.page - 1)"
+              >
+                上一页
+              </button>
+              <span
+                >第 {{ myRatings.pagination.page }} /
+                {{ myRatings.pagination.total_pages }} 页</span
+              >
+              <button
+                :disabled="!myRatings.pagination.has_next"
+                @click="loadMyRatings(myRatings.pagination.page + 1)"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 帖子列表 -->
+        <div v-show="activeTab === 'posts'" class="tab-content">
+          <div v-if="isLoadingPosts" class="loading-state">加载中...</div>
+          <div v-else-if="!myPosts || myPosts.data.length === 0" class="empty-state">
+            暂无发帖记录
+          </div>
+          <div v-else class="posts-list">
+            <div
+              v-for="post in myPosts.data"
+              :key="post.post_id"
+              class="post-card"
+              @click="goToPost(post.post_id)"
             >
-            <button
-              :disabled="!myRatings.pagination.has_next"
-              @click="loadMyRatings(myRatings.pagination.page + 1)"
-            >
-              下一页
-            </button>
+              <div class="post-card-header">
+                <h4 class="post-title">{{ post.title }}</h4>
+                <span class="post-time">{{ formatDateTime(post.created_at) }}</span>
+              </div>
+              <p class="post-preview">
+                {{ post.content.substring(0, 100) }}{{ post.content.length > 100 ? '...' : '' }}
+              </p>
+              <div class="post-stats">
+                <span>👁 {{ post.view_count }}</span>
+                <span>💬 {{ post.comment_count }}</span>
+              </div>
+            </div>
+
+            <!-- 分页 -->
+            <div v-if="myPosts.pagination.total_pages > 1" class="pagination">
+              <button
+                :disabled="!myPosts.pagination.has_prev"
+                @click="loadMyPosts(myPosts.pagination.page - 1)"
+              >
+                上一页
+              </button>
+              <span
+                >第 {{ myPosts.pagination.page }} / {{ myPosts.pagination.total_pages }} 页</span
+              >
+              <button
+                :disabled="!myPosts.pagination.has_next"
+                @click="loadMyPosts(myPosts.pagination.page + 1)"
+              >
+                下一页
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -179,7 +244,11 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import apiService from '@/services/ApiServices'
-import type { User, PaginatedRatingsResponse } from '@/interfaces/types'
+import type {
+  User,
+  PaginatedRatingsResponse,
+  PaginatedForumPostsResponse,
+} from '@/interfaces/types'
 
 const router = useRouter()
 const currentUser = ref<User | null>(null)
@@ -200,6 +269,13 @@ const passwordSuccess = ref(false)
 // 用户评价数据
 const myRatings = ref<PaginatedRatingsResponse | null>(null)
 const isLoadingRatings = ref(false)
+
+// 用户帖子数据
+const myPosts = ref<PaginatedForumPostsResponse | null>(null)
+const isLoadingPosts = ref(false)
+
+// 选项卡状态：'ratings' 或 'posts'
+const activeTab = ref<'ratings' | 'posts'>('ratings')
 
 const nicknameForm = reactive({
   nickname: '',
@@ -237,6 +313,28 @@ const loadMyRatings = async (page = 1) => {
   } finally {
     isLoadingRatings.value = false
   }
+}
+
+const loadMyPosts = async (page = 1) => {
+  isLoadingPosts.value = true
+  try {
+    myPosts.value = await apiService.fetchMyForumPosts(page, 10)
+  } catch (error) {
+    console.error('加载帖子失败:', error)
+  } finally {
+    isLoadingPosts.value = false
+  }
+}
+
+const switchTab = (tab: 'ratings' | 'posts') => {
+  activeTab.value = tab
+  if (tab === 'posts' && !myPosts.value) {
+    loadMyPosts()
+  }
+}
+
+const goToPost = (postId: number) => {
+  router.push(`/forum/post/${postId}`)
 }
 
 const goBack = () => {
@@ -332,6 +430,17 @@ const formatDate = (dateStr?: string) => {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
+  })
+}
+
+const formatDateTime = (dateStr?: string) => {
+  if (!dateStr) return ''
+  return new Date(dateStr).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
@@ -546,6 +655,49 @@ const handleUpdatePassword = async () => {
   border-bottom: 2px solid #f0f0f0;
 }
 
+.tabs-header {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #f0f0f0;
+}
+
+.tab-button {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  font-size: 16px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.tab-button:hover {
+  color: #333;
+}
+
+.tab-button.active {
+  color: #ff286e;
+  border-bottom-color: #ff286e;
+}
+
+.tab-content {
+  animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -746,6 +898,65 @@ const handleUpdatePassword = async () => {
 .rating-time {
   font-size: 12px;
   color: #94a3b8;
+}
+
+/* 帖子列表 */
+.posts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.post-card {
+  padding: 20px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.post-card:hover {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.post-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  gap: 15px;
+}
+
+.post-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+  flex: 1;
+}
+
+.post-time {
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.post-preview {
+  color: #475569;
+  font-size: 14px;
+  margin: 0 0 12px 0;
+  line-height: 1.6;
+}
+
+.post-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+  color: #64748b;
 }
 
 .loading-state,

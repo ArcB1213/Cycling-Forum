@@ -5,7 +5,13 @@ import { useRouter } from 'vue-router'
 import type { Race, Edition, Stage, StageResult, PaginationMeta } from '@/interfaces/types'
 
 // 2. 导入 API 服务
-import { fetchRaces, fetchEditions, fetchStages, fetchResults } from '@/services/ApiServices'
+import {
+  fetchRaces,
+  fetchEditions,
+  fetchStages,
+  fetchResults,
+  fetchEditionGCResults,
+} from '@/services/ApiServices'
 
 const router = useRouter()
 
@@ -18,6 +24,9 @@ const races = ref<Race[]>([])
 const editions = ref<Edition[]>([])
 const stages = ref<Stage[]>([])
 const results = ref<StageResult[]>([])
+const gcResults = ref<any[]>([]) // Use any to avoid complex union types in template
+const isGCSelected = ref(false)
+
 const resultsPagination = ref<PaginationMeta | null>(null)
 const currentResultsPage = ref<number>(1)
 const resultsPageInputValue = ref<string>('')
@@ -91,14 +100,47 @@ const onEditionChange = async () => {
     selectedEdition.value = null
     stages.value = []
     results.value = []
+    gcResults.value = []
     selectedStageId.value = null
+    isGCSelected.value = false
     return
   }
+
+  // 记住之前选择的状态，以便切换届数后自动恢复
+  const wasGCSelected = isGCSelected.value
+  const previousStageNumber = selectedStage.value?.stage_number
+
   const edition = editions.value.find((e) => e.edition_id === selectedEditionId.value)
-  if (edition) await handleEditionSelect(edition)
+  if (edition) {
+    await handleEditionSelect(edition)
+
+    // 自动恢复之前的选择状态
+    if (wasGCSelected) {
+      // 之前选的是总成绩，自动加载新届的总成绩
+      selectedStageId.value = -1
+      isGCSelected.value = true
+      await handleGCSelect()
+    } else if (previousStageNumber !== undefined) {
+      // 之前选的是某个赛段，尝试找到新届中对应的赛段
+      const matchingStage = stages.value.find((s) => s.stage_number === previousStageNumber)
+      if (matchingStage) {
+        selectedStageId.value = matchingStage.stage_id
+        await handleStageSelect(matchingStage)
+      }
+    }
+  }
 }
 
 const onStageChange = async () => {
+  if (selectedStageId.value === -1) {
+    isGCSelected.value = true
+    selectedStage.value = null
+    results.value = []
+    await handleGCSelect()
+    return
+  }
+  isGCSelected.value = false
+
   if (selectedStageId.value == null) {
     selectedStage.value = null
     results.value = []
@@ -106,6 +148,22 @@ const onStageChange = async () => {
   }
   const stage = stages.value.find((s) => s.stage_id === selectedStageId.value)
   if (stage) await handleStageSelect(stage)
+}
+
+const handleGCSelect = async (page: number = 1) => {
+  if (!selectedEdition.value) return
+  isLoadingResults.value = true
+  currentResultsPage.value = page
+  try {
+    const data = await fetchEditionGCResults(selectedEdition.value.edition_id, page, 20)
+    gcResults.value = data.data
+    resultsPagination.value = data.pagination
+  } catch (err) {
+    console.error(err)
+    error.value = '加载总成绩失败'
+  } finally {
+    isLoadingResults.value = false
+  }
 }
 
 // keep watchers to keep select values in sync when selection happens via functions
@@ -154,7 +212,13 @@ const handleStageSelect = async (stage: Stage, page: number = 1) => {
 
 // 分页控制函数
 const goToResultsPage = (page: number) => {
-  if (selectedStage.value && page >= 1 && page <= (resultsPagination.value?.total_pages || 1)) {
+  if (isGCSelected.value) {
+    handleGCSelect(page)
+  } else if (
+    selectedStage.value &&
+    page >= 1 &&
+    page <= (resultsPagination.value?.total_pages || 1)
+  ) {
     handleStageSelect(selectedStage.value, page)
   }
 }
@@ -226,9 +290,12 @@ const formatStageName = (stageNumber: number): string => {
   return stageNumber === 0 ? 'Prologue' : `Stage ${stageNumber}`
 }
 
-const selectedStageName = computed(() =>
-  selectedStage.value ? `${formatStageName(selectedStage.value.stage_number)} 成绩` : '赛段成绩',
-)
+const selectedStageName = computed(() => {
+  if (isGCSelected.value) return '总成绩排名 (GC)'
+  return selectedStage.value
+    ? `${formatStageName(selectedStage.value.stage_number)} 成绩`
+    : '赛段成绩'
+})
 </script>
 
 <template>
@@ -269,6 +336,7 @@ const selectedStageName = computed(() =>
         <label for="stage-select">赛段</label>
         <select id="stage-select" v-model="selectedStageId" @change="onStageChange">
           <option :value="null">选择赛段</option>
+          <option :value="-1" v-if="selectedEditionId">总成绩排名 (GC)</option>
           <option v-for="stage in stages" :key="stage.stage_id" :value="stage.stage_id">
             {{ formatStageName(stage.stage_number) }} - {{ stage.stage_route }}
           </option>
@@ -285,7 +353,9 @@ const selectedStageName = computed(() =>
         </span>
       </h2>
       <div class="results-wrap">
-        <div v-if="!selectedStage" class="placeholder">请先选择一个赛段</div>
+        <div v-if="!selectedStage && !isGCSelected" class="placeholder">
+          请先选择一个赛段或总成绩
+        </div>
         <div v-else-if="isLoadingResults" class="placeholder">加载成绩中...</div>
         <div v-else>
           <table class="results-table">
@@ -293,17 +363,26 @@ const selectedStageName = computed(() =>
               <tr>
                 <th>排名</th>
                 <th>车手</th>
-                <th>时间</th>
+                <th>{{ isGCSelected ? '时间/差距' : '时间' }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="result in results" :key="result.result_id">
+              <tr
+                v-for="result in isGCSelected ? gcResults : results"
+                :key="isGCSelected ? result.gc_id : result.result_id"
+              >
                 <td class="rank">{{ result.rank }}</td>
                 <td class="rider">
                   <div class="rider-name">{{ result.rider_name }}</div>
                   <div class="team-name">{{ result.team_name }}</div>
                 </td>
-                <td class="time">{{ formatTime(result.time_in_seconds) }}</td>
+                <td class="time">
+                  {{
+                    isGCSelected && result.gap_in_seconds
+                      ? `+ ${formatTime(result.gap_in_seconds)}`
+                      : formatTime(result.time_in_seconds)
+                  }}
+                </td>
               </tr>
             </tbody>
           </table>

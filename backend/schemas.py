@@ -37,6 +37,7 @@ class RiderBase(BaseModel):
     """车手基础模型"""
     rider_id: int
     rider_name: str
+    wins: Optional[int] = None  # 可选，按冠军数排序时返回
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -153,10 +154,45 @@ class WinRecord(BaseModel):
     team_name: str
 
 
+class GeneralClassificationBase(BaseModel):
+    """总成绩排名基础模型"""
+    gc_id: int
+    edition_id: int
+    rider_id: int
+    team_id: int
+    rank: int
+    time_in_seconds: int
+    gap_in_seconds: Optional[int] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class GCResultWithRelations(GeneralClassificationBase):
+    """包含车手和车队名称的总成绩"""
+    rider_name: Optional[str] = None
+    team_name: Optional[str] = None
+    race_name: Optional[str] = None
+    year: Optional[int] = None
+
+class PaginatedGCResponse(BaseModel):
+    """分页总成绩响应"""
+    edition_year: Optional[int] = None
+    race_name: Optional[str] = None
+    data: List[GCResultWithRelations]
+    pagination: PaginationMeta
+
+class GCWinRecord(BaseModel):
+    """GC冠军记录"""
+    gc_id: int
+    race_name: str
+    year: int
+    time_in_seconds: int
+    team_name: str
+
 class RiderWinsResponse(BaseModel):
     """车手冠军记录响应"""
     rider: RiderBase
     win_records: List[WinRecord]
+    gc_win_records: List[GCWinRecord] = []
 
 
 # ============ 用户认证模型 ============
@@ -307,5 +343,87 @@ class PaginatedRatingsResponse(BaseModel):
     """分页评价响应"""
     data: List[RatingResponse]
     pagination: dict
-    
+
     model_config = ConfigDict(from_attributes=True)
+
+
+# ============ 论坛相关模型 ============
+
+class ForumPostCreate(BaseModel):
+    """创建帖子请求"""
+    title: str = Field(..., min_length=5, max_length=200, description="标题")
+    content: str = Field(..., min_length=10, max_length=10000, description="正文")
+
+
+class ForumPostBase(BaseModel):
+    """帖子基础模型"""
+    post_id: int
+    title: str
+    content: str
+    author_id: int
+    view_count: int
+    comment_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ForumPostWithAuthor(ForumPostBase):
+    """包含作者信息的帖子"""
+    author_nickname: Optional[str] = None
+    author_avatar: Optional[str] = None
+
+
+class ForumPostDetail(ForumPostWithAuthor):
+    """帖子详情（包含完整信息）"""
+    is_deleted: bool = False
+
+
+class PaginatedForumPostsResponse(BaseModel):
+    """分页帖子响应"""
+    data: List[ForumPostWithAuthor]
+    pagination: PaginationMeta
+
+
+class CommentCreate(BaseModel):
+    """创建评论请求"""
+    content: str = Field(..., min_length=1, max_length=2000, description="评论内容")
+    parent_id: Optional[int] = Field(None, description="父评论 ID（可选，NULL 表示一级评论）")
+
+
+class CommentBase(BaseModel):
+    """评论基础模型"""
+    comment_id: int
+    content: str
+    post_id: int
+    author_id: int
+    floor_number: Optional[int] = None
+    parent_id: Optional[int] = None
+    root_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommentWithAuthor(CommentBase):
+    """包含作者信息的评论"""
+    author_nickname: Optional[str] = None
+    author_avatar: Optional[str] = None
+    replies: List['CommentWithAuthor'] = []
+
+
+# 递归模型支持
+CommentWithAuthor.model_rebuild()
+
+
+class CommentResponse(CommentWithAuthor):
+    """评论响应（包含作者信息）"""
+    pass
+
+
+class CommentsResponse(BaseModel):
+    """评论树状响应"""
+    floors: List[CommentWithAuthor]
+    pagination: PaginationMeta

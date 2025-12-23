@@ -21,6 +21,13 @@ import type {
   RiderStats,
   RiderDetailWithRatings,
   PaginatedRatingsResponse,
+  PaginatedGCResponse,
+  ForumPost,
+  ForumPostCreate,
+  ForumComment,
+  CommentCreate,
+  PaginatedForumPostsResponse,
+  CommentsResponse,
 } from '@/interfaces/types' // 导入类型
 
 // FastAPI 后端地址（uvicorn 默认端口 8000）
@@ -145,13 +152,16 @@ export const fetchResults = async (
  * 获取所有车手列表（分页）
  * @param page - 页码，默认为1
  * @param limit - 每页数量，默认为16
+ * @param search - 搜索关键词
+ * @param sortBy - 排序方式：name（姓名）、stage_wins（赛段冠军数）、gc_wins（总成绩冠军数）
  */
 export const fetchRiders = async (
   page: number = 1,
   limit: number = 18,
   search?: string,
+  sortBy: string = 'name',
 ): Promise<PaginatedRidersResponse> => {
-  const params: any = { page, limit }
+  const params: any = { page, limit, sort_by: sortBy }
   if (search) {
     params.search = search
   }
@@ -193,6 +203,48 @@ export const fetchRiderRaces = async (
  */
 export const fetchRiderWins = async (riderId: number): Promise<ApiRiderWins> => {
   const response = await apiClient.get<ApiRiderWins>(`/async/riders/${riderId}/wins`)
+  return response.data
+}
+
+/**
+ * 获取车手总成绩历史
+ */
+export const fetchRiderGCHistory = async (
+  riderId: number,
+  page: number = 1,
+  pageSize: number = 20,
+): Promise<PaginatedGCResponse> => {
+  try {
+    const response = await apiClient.get<PaginatedGCResponse>(
+      `/async/riders/${riderId}/gc-history`,
+      {
+        params: { page, page_size: pageSize },
+      },
+    )
+    return response.data
+  } catch (error) {
+    console.error(`Error fetching rider GC history for rider ${riderId}:`, error)
+    throw error
+  }
+}
+
+/**
+ * 获取某一届赛事的总成绩（分页）
+ * @param editionId - 届数的 ID
+ * @param page - 页码，默认为1
+ * @param limit - 每页数量，默认为20
+ */
+export const fetchEditionGCResults = async (
+  editionId: number,
+  page: number = 1,
+  limit: number = 20,
+): Promise<PaginatedGCResponse> => {
+  const response = await apiClient.get<PaginatedGCResponse>(
+    `/async/editions/${editionId}/gc-results`,
+    {
+      params: { page, limit },
+    },
+  )
   return response.data
 }
 
@@ -288,14 +340,80 @@ export const updatePassword = async (
 }
 
 /**
- * 获取论坛帖子列表（需要登录）
+ * 获取论坛帖子列表（分页）
  */
-export const getForumPosts = async (): Promise<{
-  message: string
-  user: User
-  posts: Array<{ id: number; title: string; author: string; content: string }>
-}> => {
-  const response = await apiClient.get('/forum/posts')
+export const fetchForumPosts = async (
+  page = 1,
+  limit = 20,
+): Promise<PaginatedForumPostsResponse> => {
+  const response = await apiClient.get<PaginatedForumPostsResponse>('/async/forum/posts', {
+    params: { page, limit },
+  })
+  return response.data
+}
+
+/**
+ * 创建新帖子
+ */
+export const createForumPost = async (postData: ForumPostCreate): Promise<ForumPost> => {
+  const response = await apiClient.post<ForumPost>('/async/forum/posts', postData)
+  return response.data
+}
+
+/**
+ * 获取帖子详情
+ */
+export const fetchForumPostDetail = async (postId: number): Promise<ForumPost> => {
+  const response = await apiClient.get<ForumPost>(`/async/forum/posts/${postId}`)
+  return response.data
+}
+
+/**
+ * 创建评论
+ */
+export const createComment = async (
+  postId: number,
+  commentData: CommentCreate,
+): Promise<ForumComment> => {
+  const response = await apiClient.post<ForumComment>(
+    `/async/forum/posts/${postId}/comments`,
+    commentData,
+  )
+  return response.data
+}
+
+/**
+ * 获取评论列表（树状）
+ */
+export const fetchPostComments = async (
+  postId: number,
+  page = 1,
+  limit = 20,
+): Promise<CommentsResponse> => {
+  const response = await apiClient.get<CommentsResponse>(`/async/forum/posts/${postId}/comments`, {
+    params: { page, limit },
+  })
+  return response.data
+}
+
+/**
+ * 删除帖子
+ */
+export const deleteForumPost = async (postId: number): Promise<MessageResponse> => {
+  const response = await apiClient.delete<MessageResponse>(`/async/forum/posts/${postId}`)
+  return response.data
+}
+
+/**
+ * 删除评论
+ */
+export const deleteComment = async (
+  postId: number,
+  commentId: number,
+): Promise<MessageResponse> => {
+  const response = await apiClient.delete<MessageResponse>(
+    `/async/forum/posts/${postId}/comments/${commentId}`,
+  )
   return response.data
 }
 
@@ -437,6 +555,19 @@ export const fetchMyAllRatings = async (
   return response.data
 }
 
+/**
+ * 获取当前用户发表的所有帖子
+ */
+export const fetchMyForumPosts = async (
+  page = 1,
+  limit = 10,
+): Promise<PaginatedForumPostsResponse> => {
+  const response = await apiClient.get<PaginatedForumPostsResponse>('/auth/my-posts', {
+    params: { page, limit },
+  })
+  return response.data
+}
+
 // 默认导出所有 API 方法
 export default {
   fetchRaces,
@@ -456,7 +587,13 @@ export default {
   getCurrentUser,
   updateNickname,
   updatePassword,
-  getForumPosts,
+  fetchForumPosts,
+  createForumPost,
+  fetchForumPostDetail,
+  createComment,
+  fetchPostComments,
+  deleteForumPost,
+  deleteComment,
   uploadAvatar,
   updateUserAvatar,
   isAuthenticated,
@@ -469,4 +606,7 @@ export default {
   fetchRiderDetailWithRatings,
   deleteRating,
   fetchMyAllRatings,
+  fetchEditionGCResults,
+  fetchRiderGCHistory,
+  fetchMyForumPosts,
 }

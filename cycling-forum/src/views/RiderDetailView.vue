@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '@/assets/common-styles.css'
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import type {
@@ -8,6 +9,7 @@ import type {
   RiderDetailWithRatings,
   RatingCreate,
   PaginatedRatingsResponse,
+  PaginatedGCResponse,
   User,
 } from '@/interfaces/types'
 import {
@@ -20,6 +22,7 @@ import {
   deleteRating,
   isAuthenticated,
   logout,
+  fetchRiderGCHistory,
 } from '@/services/ApiServices'
 
 const router = useRouter()
@@ -31,11 +34,13 @@ const riderRaces = ref<ApiRiderRaces | null>(null)
 const riderWins = ref<ApiRiderWins | null>(null)
 const riderRatings = ref<RiderDetailWithRatings | null>(null)
 const ratingsList = ref<PaginatedRatingsResponse | null>(null)
+const riderGCHistory = ref<PaginatedGCResponse | null>(null)
 
 const isLoading = ref<boolean>(false)
 const isLoadingRaces = ref<boolean>(false)
 const isLoadingWins = ref<boolean>(false)
 const isLoadingRatings = ref<boolean>(false)
+const isLoadingGCHistory = ref<boolean>(false)
 const isSubmittingRating = ref<boolean>(false)
 const error = ref<string | null>(null)
 
@@ -44,11 +49,12 @@ const userScore = ref<number>(0)
 const userComment = ref<string>('')
 const showRatingForm = ref<boolean>(false)
 
-// 当前激活的标签页: 'races' | 'wins' | 'teams' | 'ratings'
-const activeTab = ref<'races' | 'wins' | 'teams' | 'ratings'>('teams')
+// 当前激活的标签页: 'races' | 'wins' | 'teams' | 'ratings' | 'gc'
+const activeTab = ref<'races' | 'wins' | 'teams' | 'ratings' | 'gc'>('teams')
 
 // 参赛记录分页
 const racesCurrentPage = ref<number>(1)
+const gcHistoryCurrentPage = ref<number>(1)
 
 const isLoggedIn = computed(() => isAuthenticated())
 
@@ -177,7 +183,7 @@ const handleLogout = () => {
   router.push('/')
 }
 
-const setActiveTab = async (tab: 'races' | 'wins' | 'teams' | 'ratings') => {
+const setActiveTab = async (tab: 'races' | 'wins' | 'teams' | 'ratings' | 'gc') => {
   activeTab.value = tab
 
   const riderId = Number(route.params.id)
@@ -206,6 +212,22 @@ const setActiveTab = async (tab: 'races' | 'wins' | 'teams' | 'ratings') => {
     }
   } else if (tab === 'ratings' && !ratingsList.value) {
     await loadRatingsList()
+  } else if (tab === 'gc' && !riderGCHistory.value) {
+    await loadGCHistoryPage(1)
+  }
+}
+
+const loadGCHistoryPage = async (page: number) => {
+  const riderId = Number(route.params.id)
+  isLoadingGCHistory.value = true
+  try {
+    riderGCHistory.value = await fetchRiderGCHistory(riderId, page, 20)
+    gcHistoryCurrentPage.value = page
+  } catch (err) {
+    console.error(err)
+    error.value = '加载总成绩记录失败'
+  } finally {
+    isLoadingGCHistory.value = false
   }
 }
 
@@ -252,7 +274,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="detail-container">
+  <div class="page-container rider-detail-page">
     <!-- 顶部用户栏 -->
     <div class="user-bar">
       <div v-if="currentUser" class="user-info" @click="navigateToProfile">
@@ -307,8 +329,22 @@ onMounted(() => {
           tabindex="0"
         >
           <div class="stat-icon">🏆</div>
-          <div class="stat-value">{{ riderDetail.stats.stage_wins }}</div>
-          <div class="stat-label">赛段冠军</div>
+          <div class="stat-value">
+            {{ riderDetail.stats.stage_wins }} | {{ riderDetail.stats.gc_wins }}
+          </div>
+          <div class="stat-label">赛段冠军 | 总冠军</div>
+        </div>
+
+        <div
+          class="stat-card"
+          :class="{ active: activeTab === 'gc' }"
+          @click="setActiveTab('gc')"
+          role="button"
+          tabindex="0"
+        >
+          <div class="stat-icon">📊</div>
+          <div class="stat-value">{{ riderDetail.stats.total_gc_entries || 0 }}</div>
+          <div class="stat-label">总成绩排名</div>
         </div>
 
         <div
@@ -451,6 +487,77 @@ onMounted(() => {
           </div>
         </div>
 
+        <!-- GC 历史内容 -->
+        <div v-if="activeTab === 'gc'" class="tab-content">
+          <h2 class="section-title">总成绩排名历史</h2>
+          <div v-if="isLoadingGCHistory" class="loading-state">加载中...</div>
+          <div v-else-if="!riderGCHistory || riderGCHistory.data.length === 0" class="empty-state">
+            暂无总成绩记录
+          </div>
+          <div v-else class="records-container">
+            <div class="records-summary">
+              共参加了 <strong>{{ riderGCHistory.pagination.total }}</strong> 届赛事的总成绩排名
+            </div>
+            <div class="records-table-wrap">
+              <table class="records-table">
+                <thead>
+                  <tr>
+                    <th>年份</th>
+                    <th>赛事</th>
+                    <th>排名</th>
+                    <th>用时/差距</th>
+                    <th>车队</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="record in riderGCHistory.data"
+                    :key="record.gc_id"
+                    :class="{ 'win-row': record.rank === 1 }"
+                  >
+                    <td class="year-cell">{{ record.year }}</td>
+                    <td class="race-cell">{{ record.race_name }}</td>
+                    <td class="rank-cell" :class="{ 'rank-first': record.rank === 1 }">
+                      <span v-if="record.rank === 1" class="trophy">🏆</span>
+                      {{ record.rank }}
+                    </td>
+                    <td class="time-cell">
+                      {{
+                        record.gap_in_seconds
+                          ? `+ ${formatTime(record.gap_in_seconds)}`
+                          : formatTime(record.time_in_seconds)
+                      }}
+                    </td>
+                    <td class="team-cell">{{ record.team_name }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- 分页控件 -->
+            <div v-if="riderGCHistory.pagination.total_pages > 1" class="pagination">
+              <button
+                class="pagination-btn"
+                :disabled="!riderGCHistory.pagination.has_prev"
+                @click="loadGCHistoryPage(gcHistoryCurrentPage - 1)"
+              >
+                上一页
+              </button>
+              <span class="pagination-info">
+                第 {{ riderGCHistory.pagination.page }} /
+                {{ riderGCHistory.pagination.total_pages }} 页
+              </span>
+              <button
+                class="pagination-btn"
+                :disabled="!riderGCHistory.pagination.has_next"
+                @click="loadGCHistoryPage(gcHistoryCurrentPage + 1)"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 参赛场次内容 -->
         <div v-if="activeTab === 'races'" class="tab-content">
           <h2 class="section-title">参赛场次详情</h2>
@@ -521,29 +628,71 @@ onMounted(() => {
 
         <!-- 赛段冠军内容 -->
         <div v-if="activeTab === 'wins'" class="tab-content">
-          <h2 class="section-title">赛段冠军记录</h2>
+          <h2 class="section-title">冠军记录</h2>
           <div v-if="isLoadingWins" class="loading-state">加载中...</div>
-          <div v-else-if="!riderWins || riderWins.win_records.length === 0" class="empty-state">
-            该车手暂无赛段冠军记录
+          <div
+            v-else-if="
+              !riderWins ||
+              (riderWins.win_records.length === 0 &&
+                (!riderWins.gc_win_records || riderWins.gc_win_records.length === 0))
+            "
+            class="empty-state"
+          >
+            该车手暂无冠军记录
           </div>
           <div v-else class="records-container">
-            <div class="records-summary wins-summary">
-              共获得
-              <strong class="wins-count">{{ riderDetail.stats.stage_wins }}</strong> 个赛段冠军 🏆
-            </div>
-            <div class="wins-grid">
-              <div v-for="win in riderWins.win_records" :key="win.result_id" class="win-card">
-                <div class="win-header">
-                  <span class="win-trophy">🏆</span>
-                  <div class="win-title">
-                    <div class="win-race">{{ win.race_name }} {{ win.year }}</div>
-                    <div class="win-stage">{{ formatStageName(win.stage_number) }}</div>
+            <!-- GC Wins -->
+            <div
+              v-if="riderWins.gc_win_records && riderWins.gc_win_records.length > 0"
+              class="wins-section"
+            >
+              <h3 class="subsection-title">总成绩冠军 (GC)</h3>
+              <div class="records-summary wins-summary">
+                共获得
+                <strong class="wins-count">{{ riderDetail.stats.gc_wins }}</strong> 个总成绩冠军
+              </div>
+              <div class="wins-grid">
+                <div
+                  v-for="win in riderWins.gc_win_records"
+                  :key="win.gc_id"
+                  class="win-card gc-win-card"
+                >
+                  <div class="win-header">
+                    <span class="win-trophy">🏆</span>
+                    <div class="win-title">
+                      <div class="win-race">{{ win.race_name }} {{ win.year }}</div>
+                      <div class="win-stage">General Classification</div>
+                    </div>
+                  </div>
+                  <div class="win-footer">
+                    <span class="win-time">⏱️ {{ formatTime(win.time_in_seconds) }}</span>
+                    <span class="win-team">🚴 {{ win.team_name }}</span>
                   </div>
                 </div>
-                <div class="win-route">{{ win.stage_route }}</div>
-                <div class="win-footer">
-                  <span class="win-time">⏱️ {{ formatTime(win.time_in_seconds) }}</span>
-                  <span class="win-team">🚴 {{ win.team_name }}</span>
+              </div>
+            </div>
+
+            <!-- Stage Wins -->
+            <div v-if="riderWins.win_records.length > 0" class="wins-section">
+              <h3 class="subsection-title">赛段冠军</h3>
+              <div class="records-summary wins-summary">
+                共获得
+                <strong class="wins-count">{{ riderDetail.stats.stage_wins }}</strong> 个赛段冠军
+              </div>
+              <div class="wins-grid">
+                <div v-for="win in riderWins.win_records" :key="win.result_id" class="win-card">
+                  <div class="win-header">
+                    <span class="win-trophy">🏆</span>
+                    <div class="win-title">
+                      <div class="win-race">{{ win.race_name }} {{ win.year }}</div>
+                      <div class="win-stage">{{ formatStageName(win.stage_number) }}</div>
+                    </div>
+                  </div>
+                  <div class="win-route">{{ win.stage_route }}</div>
+                  <div class="win-footer">
+                    <span class="win-time">⏱️ {{ formatTime(win.time_in_seconds) }}</span>
+                    <span class="win-team">🚴 {{ win.team_name }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -804,20 +953,6 @@ onMounted(() => {
   color: var(--color-text-lighter);
   font-size: 0.875rem;
   font-style: italic;
-}
-
-.loading-state,
-.empty-state {
-  text-align: center;
-  padding: 2rem;
-  color: var(--color-text-lighter);
-  font-style: italic;
-}
-
-.loading-state {
-  padding: 3rem;
-  font-size: 1.125rem;
-  color: var(--color-text-light);
 }
 
 .records-container {
@@ -1111,7 +1246,7 @@ textarea {
   background-color: #fef9c3;
 }
 
-/* ============ 表格单元格样式 ============ */
+/* 表格单元格样式 */
 .cell-primary {
   font-weight: 600;
   color: var(--color-text-dark);
@@ -1294,82 +1429,19 @@ textarea {
   flex: 1;
 }
 
-/* ============ 用户栏样式 ============ */
-.user-bar {
-  position: fixed;
-  top: 0;
-  right: 0;
-  padding: 15px 30px;
-  z-index: 1000;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  color: white;
+.subsection-title {
+  font-size: 1.2rem;
   font-weight: 600;
-  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-  transition: opacity 0.3s;
+  color: var(--color-text-dark);
+  margin: 1.5rem 0 1rem;
+  padding-left: 0.75rem;
+  border-left: 4px solid var(--color-primary);
 }
 
-.user-info span {
-  color: #333;
-  font-weight: bold;
-  border: #3b82f6 2px solid;
-  padding: 6px 12px;
-  border-radius: 4px;
-  background: white;
-}
-
-.user-info span:hover {
-  background-color: #3b82f6;
-  color: white;
-}
-
-.auth-links {
-  display: flex;
-  gap: 10px;
-}
-
-.btn-logout-small,
-.btn-login-small,
-.btn-register-small {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s;
-  font-size: 0.9rem;
-}
-
-.btn-logout-small {
-  background: rgba(239, 68, 68, 0.9);
-  color: white;
-}
-
-.btn-logout-small:hover {
-  background: rgba(220, 38, 38, 1);
-}
-
-.btn-login-small {
-  background: rgba(255, 255, 255, 0.9);
-  color: #667eea;
-}
-
-.btn-login-small:hover {
-  background: white;
-}
-
-.btn-register-small {
-  background: rgba(59, 130, 246, 0.9);
-  color: white;
-}
-
-.btn-register-small:hover {
-  background: rgba(59, 130, 246, 1);
+.wins-section + .wins-section {
+  margin-top: 2rem;
+  padding-top: 2rem;
+  border-top: 1px dashed var(--color-border);
 }
 
 @media (max-width: 768px) {

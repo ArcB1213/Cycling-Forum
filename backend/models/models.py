@@ -2,7 +2,7 @@
 数据库模型定义 - 使用纯 SQLAlchemy 2.0
 兼容 MySQL
 """
-from sqlalchemy import Integer, String, Numeric, ForeignKey, Index, BigInteger, DateTime
+from sqlalchemy import Integer, String, Numeric, ForeignKey, Index, BigInteger, DateTime, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List, Optional
 from decimal import Decimal
@@ -48,6 +48,11 @@ class Edition(Base):
         lazy='select',
         cascade="all, delete-orphan"
     )
+    gc_results: Mapped[List["GeneralClassification"]] = relationship(
+        back_populates='edition',
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
     
     # MySQL: 复合唯一索引
     __table_args__ = (
@@ -74,6 +79,7 @@ class Team(Base):
     
     # 关系
     results: Mapped[List["StageResult"]] = relationship(back_populates='team', lazy='select')
+    gc_results: Mapped[List["GeneralClassification"]] = relationship(back_populates='team', lazy='select')
 
     def to_dict(self):
         return {
@@ -94,6 +100,7 @@ class Rider(Base):
     
     # 关系
     results: Mapped[List["StageResult"]] = relationship(back_populates='rider', lazy='select')
+    gc_results: Mapped[List["GeneralClassification"]] = relationship(back_populates='rider', lazy='select')
     ratings: Mapped[List["Rating"]] = relationship(
         back_populates='rider',
         lazy='select',
@@ -207,7 +214,17 @@ class User(Base):
     
     # 关系
     ratings: Mapped[List["Rating"]] = relationship(
-        back_populates='user', 
+        back_populates='user',
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
+    forum_posts: Mapped[List["ForumPost"]] = relationship(
+        back_populates='author',
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
+    forum_comments: Mapped[List["ForumComment"]] = relationship(
+        back_populates='author',
         lazy='select',
         cascade="all, delete-orphan"
     )
@@ -302,4 +319,159 @@ class RiderStats(Base):
             'total_rating_count': self.total_rating_count,
             'average_score': avg_score,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class GeneralClassification(Base):
+    """总成绩排名 (GC)"""
+    __tablename__ = 'general_classifications'
+    
+    gc_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    edition_id: Mapped[int] = mapped_column(ForeignKey('editions.edition_id'), nullable=False, index=True)
+    rider_id: Mapped[int] = mapped_column(ForeignKey('riders.rider_id'), nullable=False, index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey('teams.team_id'), nullable=False)
+    
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_in_seconds: Mapped[int] = mapped_column(Integer, nullable=False) # 总用时
+    gap_in_seconds: Mapped[int] = mapped_column(Integer, nullable=True) # 与第一名的时间差
+    
+    # 关系
+    edition: Mapped["Edition"] = relationship(back_populates='gc_results')
+    rider: Mapped["Rider"] = relationship(back_populates='gc_results')
+    team: Mapped["Team"] = relationship(back_populates='gc_results')
+
+    __table_args__ = (
+        Index('idx_gc_edition_rank', 'edition_id', 'rank'),
+        Index('idx_gc_rider', 'rider_id'),
+        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+    )
+
+    def to_dict(self, include_relations=False):
+        data = {
+            'gc_id': self.gc_id,
+            'edition_id': self.edition_id,
+            'rider_id': self.rider_id,
+            'team_id': self.team_id,
+            'rank': self.rank,
+            'time_in_seconds': self.time_in_seconds,
+            'gap_in_seconds': self.gap_in_seconds
+        }
+        if include_relations:
+            data['rider_name'] = self.rider.rider_name if self.rider else None
+            data['team_name'] = self.team.team_name if self.team else None
+            data['race_name'] = self.edition.race.race_name if self.edition and self.edition.race else None
+            data['year'] = self.edition.year if self.edition else None
+        return data
+
+
+class ForumPost(Base):
+    """论坛帖子表"""
+    __tablename__ = 'forum_posts'
+
+    # 基础字段
+    post_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(String(10000), nullable=False)
+
+    # 关联字段
+    author_id: Mapped[int] = mapped_column(ForeignKey('users.user_id'), nullable=False, index=True)
+
+    # 统计字段（Write-Back 策略：Redis 异步更新）
+    view_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    comment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # 时间戳
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 软删除
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
+    # 关系
+    author: Mapped["User"] = relationship(back_populates='forum_posts')
+    comments: Mapped[List["ForumComment"]] = relationship(
+        back_populates='post',
+        lazy='select',
+        cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index('idx_post_created_at', 'created_at'),
+        Index('idx_author_created_at', 'author_id', 'created_at'),
+        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+    )
+
+    def to_dict(self):
+        return {
+            'post_id': self.post_id,
+            'title': self.title,
+            'content': self.content,
+            'author_id': self.author_id,
+            'view_count': self.view_count,
+            'comment_count': self.comment_count,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ForumComment(Base):
+    """论坛评论表 - 支持多级嵌套"""
+    __tablename__ = 'forum_comments'
+
+    # 基础字段
+    comment_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    content: Mapped[str] = mapped_column(String(2000), nullable=False)
+
+    # 关联字段
+    post_id: Mapped[int] = mapped_column(ForeignKey('forum_posts.post_id'), nullable=False, index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey('users.user_id'), nullable=False, index=True)
+
+    # 多级嵌套支持
+    # floor_number: 一级评论（楼层号），从 1 开始
+    floor_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # parent_id: 父评论 ID（NULL 表示一级评论）
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey('forum_comments.comment_id'), nullable=True, index=True)
+    # root_id: 根评论 ID（指向一级评论，用于快速查询某个楼层的所有子回复）
+    root_id: Mapped[Optional[int]] = mapped_column(ForeignKey('forum_comments.comment_id'), nullable=True, index=True)
+
+    # 时间戳
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 软删除
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 关系
+    post: Mapped["ForumPost"] = relationship(back_populates='comments')
+    author: Mapped["User"] = relationship(back_populates='forum_comments')
+    parent: Mapped[Optional["ForumComment"]] = relationship(
+        back_populates='replies',
+        remote_side=[comment_id],
+        foreign_keys=[parent_id]
+    )
+    replies: Mapped[List["ForumComment"]] = relationship(
+        back_populates='parent',
+        cascade="all, delete-orphan",
+        foreign_keys=[parent_id]
+    )
+
+    __table_args__ = (
+        Index('idx_comment_post_created_at', 'post_id', 'created_at'),
+        Index('idx_comment_root_id', 'root_id'),
+        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
+    )
+
+    def to_dict(self):
+        return {
+            'comment_id': self.comment_id,
+            'content': self.content,
+            'post_id': self.post_id,
+            'author_id': self.author_id,
+            'floor_number': self.floor_number,
+            'parent_id': self.parent_id,
+            'root_id': self.root_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'author_nickname': self.author.nickname if self.author else None,
+            'author_avatar': self.author.avatar if self.author else None,
         }

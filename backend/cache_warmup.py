@@ -91,9 +91,9 @@ async def preload_popular_riders(db: AsyncSession, limit: int = 50) -> int:
         return 0
 
 
-async def preload_recent_editions(db: AsyncSession, limit: int = 5) -> int:
+async def preload_recent_editions(db: AsyncSession) -> int:
     """
-    预加载最近几届赛事的届数信息
+    预加载所有赛事的全部届数信息（不做 limit 限制）
     对应端点: GET /api/async/races/{race_id}/editions
     """
     try:
@@ -113,12 +113,11 @@ async def preload_recent_editions(db: AsyncSession, limit: int = 5) -> int:
             if not race:
                 continue
             
-            # 查询届数（只预热最近N届）
+            # 查询所有届数（不做 limit 限制，确保数据完整）
             editions_result = await db.execute(
                 select(Edition)
                 .filter(Edition.race_id == race_id)
                 .order_by(Edition.year.desc())
-                .limit(limit)
             )
             editions = editions_result.scalars().all()
             
@@ -135,7 +134,7 @@ async def preload_recent_editions(db: AsyncSession, limit: int = 5) -> int:
             )
             preloaded += 1
         
-        print(f"  ✓ 预热赛事届数: {preloaded} 个赛事 (每个最近 {limit} 届)")
+        print(f"  ✓ 预热赛事届数: {preloaded} 个赛事 (全部届数)")
         return preloaded
     except Exception as e:
         print(f"  ✗ 预热赛事届数失败: {e}")
@@ -161,8 +160,8 @@ async def preload_all_caches(db: AsyncSession) -> dict:
     # 预热车手列表（前50个，约3-4页）
     stats["riders_pages"] = await preload_popular_riders(db, limit=50)
     
-    # 预热最近赛事届数（每个赛事最近5届）
-    stats["editions"] = await preload_recent_editions(db, limit=5)
+    # 预热所有赛事届数
+    stats["editions"] = await preload_recent_editions(db)
     
     print(f"\n✅ 缓存预热完成!")
     print(f"   - 赛事数据: {stats['races']} 条")

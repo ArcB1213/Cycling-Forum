@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update, text
+from sqlalchemy import select, func, update, text, distinct
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import List, Optional
 from contextlib import asynccontextmanager
@@ -19,7 +19,7 @@ from datetime import datetime
 from models.database import get_db, get_async_db,close_db_connections
 
 # 导入模型
-from models.models import Race, Edition, Stage, StageResult, Rider, Team, User, Rating, RiderStats
+from models.models import Race, Edition, Stage, StageResult, Rider, Team, User, Rating, RiderStats, GeneralClassification, ForumPost, ForumComment
 
 # 导入 Pydantic 响应模型
 from schemas import (
@@ -33,7 +33,11 @@ from schemas import (
     PaginationMeta, PaginatedRidersResponse, PaginatedStageResultsResponse,
     UpdateNicknameRequest, UpdatePasswordRequest,
     RatingBase, RatingCreate, RatingResponse, RiderRatingStatsResponse,
-    RiderDetailWithRatingsResponse, PaginatedRatingsResponse
+    RiderDetailWithRatingsResponse, PaginatedRatingsResponse,
+    PaginatedGCResponse, GCResultWithRelations, GeneralClassificationBase,
+    ForumPostCreate, ForumPostBase, ForumPostWithAuthor, ForumPostDetail,
+    PaginatedForumPostsResponse, CommentCreate, CommentBase, CommentWithAuthor,
+    CommentsResponse
 )
 
 # 导入缓存工具
@@ -57,35 +61,52 @@ from rate_limiter import limiter, rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 # 导入缓存相关
-from cache import close_async_redis
+from cache import close_async_redis, invalidate_cache_async
 from cache_warmup import preload_all_caches
+
+# 导入论坛工具
+from forum_utils import increment_view_count, get_total_view_count, batch_get_view_counts
+from forum_write_back_task import lifespan_with_write_back
+
+# 导入 WebSocket 管理器
+from websocket_manager import comment_manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
-    print("🚀 应用启动...")
-    
+    print("[START] Application starting...")
+
     # 初始化异步 Redis 连接
     try:
         from cache import get_async_redis
         await get_async_redis()
-        print("✓ Redis 异步客户端初始化完成")
+        print("[OK] Redis async client initialized")
     except Exception as e:
-        print(f"✗ Redis 异步客户端初始化失败: {e}")
-    
+        print(f"[ERROR] Redis async client initialization failed: {e}")
+
     # 缓存预热
     try:
         async for db in get_async_db():
             await preload_all_caches(db)
             break
     except Exception as e:
-        print(f"⚠️  缓存预热失败: {e}")
-    
+        print(f"[WARNING] Cache warmup failed: {e}")
+
+    # 启动 Write-Back 定时任务
+    try:
+        from forum_write_back_task import start_write_back_task
+        await start_write_back_task()
+        print("[OK] Write-Back task started")
+    except Exception as e:
+        print(f"[WARNING] Write-Back task failed to start: {e}")
+
     yield
-    
+
     # 关闭时
-    print("🛑 应用关闭，清理 Redis 连接...")
+    print("[SHUTDOWN] Application shutting down, cleaning up connections...")
+    from forum_write_back_task import stop_write_back_task
+    await stop_write_back_task()
     await close_async_redis()
     await close_db_connections()
 
@@ -291,44 +312,186 @@ async def get_stage_results_async(stage_id: int, page: int = 1, limit: int = 20,
     }
 
 
+@app.get("/api/async/editions/{edition_id}/gc-results", response_model=PaginatedGCResponse, tags=["Editions (Async)"])
+@cache_response("edition_gc_results_async", expire=3600)
+async def get_edition_gc_results_async(edition_id: int, page: int = 1, limit: int = 20, db: AsyncSession = Depends(get_async_db)):
+    """获取某一届赛事的总成绩排名 (GC) - 异步版本"""
+    result = await db.execute(select(Edition).options(selectinload(Edition.race)).filter(Edition.edition_id == edition_id))
+    edition = result.scalar_one_or_none()
+    if not edition:
+        raise HTTPException(status_code=404, detail="Edition not found")
+    
+    # Count
+    count_result = await db.execute(
+        select(func.count()).select_from(GeneralClassification).filter(GeneralClassification.edition_id == edition_id)
+    )
+    total = count_result.scalar() or 0
+    
+    # Pagination
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # Query
+    result = await db.execute(
+        select(GeneralClassification)
+        .options(
+            selectinload(GeneralClassification.rider),
+            selectinload(GeneralClassification.team)
+        )
+        .filter(GeneralClassification.edition_id == edition_id)
+        .order_by(GeneralClassification.rank)
+        .offset(offset)
+        .limit(limit)
+    )
+    results = result.scalars().all()
+    
+    data = []
+    for res in results:
+        data.append({
+            "gc_id": res.gc_id,
+            "edition_id": res.edition_id,
+            "rider_id": res.rider_id,
+            "team_id": res.team_id,
+            "rank": res.rank,
+            "time_in_seconds": res.time_in_seconds,
+            "gap_in_seconds": res.gap_in_seconds,
+            "rider_name": res.rider.rider_name if res.rider else None,
+            "team_name": res.team.team_name if res.team else None,
+            "race_name": edition.race.race_name,
+            "year": edition.year
+        })
+        
+    return {
+        "edition_year": edition.year,
+        "race_name": edition.race.race_name,
+        "data": data,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
+
+
 # ============ 异步骑手相关 API ============
 
 @app.get("/api/async/riders", response_model=PaginatedRidersResponse, tags=["Riders (Async)"])
 @cache_response("riders_async", expire=300)
-async def get_riders_async(page: int = 1, limit: int = 16, search: str = None, db: AsyncSession = Depends(get_async_db)):
+async def get_riders_async(
+    page: int = 1, 
+    limit: int = 16, 
+    search: str = None, 
+    sort_by: str = "name",
+    db: AsyncSession = Depends(get_async_db)
+):
     """获取所有车手列表 - 异步版本（推荐用于高并发）
     
     参数:
     - page: 页码，从 1 开始
     - limit: 每页记录数，默认 16
     - search: 可选，搜索车手姓名（模糊匹配）
+    - sort_by: 排序方式，可选值：name（姓名）、stage_wins（赛段冠军数）、gc_wins（总成绩冠军数）
     """
-    # 构建查询条件
-    query = select(Rider)
-    count_query = select(func.count()).select_from(Rider)
-    
-    # 如果有搜索词，添加模糊查询条件
-    if search:
-        search_pattern = f"%{search}%"
-        query = query.filter(Rider.rider_name.ilike(search_pattern))
-        count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
-    
-    # 计算总记录数
-    count_result = await db.execute(count_query)
-    total = count_result.scalar() or 0
-    
-    # 计算分页参数
-    total_pages = (total + limit - 1) // limit
-    offset = (page - 1) * limit
-    
-    # 查询分页数据
-    result = await db.execute(
-        query.order_by(Rider.rider_name).offset(offset).limit(limit)
-    )
-    riders = result.scalars().all()
+    # 根据排序方式构建不同的查询
+    if sort_by == "stage_wins":
+        # 按赛段冠军数排序（子查询）
+        stage_wins_subq = (
+            select(
+                StageResult.rider_id,
+                func.count().label('win_count')
+            )
+            .filter(StageResult.rank == 1)
+            .group_by(StageResult.rider_id)
+            .subquery()
+        )
+        
+        query = (
+            select(Rider, func.coalesce(stage_wins_subq.c.win_count, 0).label('wins'))
+            .outerjoin(stage_wins_subq, Rider.rider_id == stage_wins_subq.c.rider_id)
+        )
+        count_query = select(func.count()).select_from(Rider)
+        
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(Rider.rider_name.ilike(search_pattern))
+            count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
+        
+        # 计算总记录数
+        count_result = await db.execute(count_query)
+        total = count_result.scalar() or 0
+        total_pages = (total + limit - 1) // limit
+        offset = (page - 1) * limit
+        
+        # 按冠军数降序，同冠军数按姓名排序
+        result = await db.execute(
+            query.order_by(text('wins DESC'), Rider.rider_name).offset(offset).limit(limit)
+        )
+        rows = result.all()
+        riders_data = [{"rider_id": row[0].rider_id, "rider_name": row[0].rider_name, "wins": row[1]} for row in rows]
+        
+    elif sort_by == "gc_wins":
+        # 按总成绩冠军数排序（子查询）
+        gc_wins_subq = (
+            select(
+                GeneralClassification.rider_id,
+                func.count().label('win_count')
+            )
+            .filter(GeneralClassification.rank == 1)
+            .group_by(GeneralClassification.rider_id)
+            .subquery()
+        )
+        
+        query = (
+            select(Rider, func.coalesce(gc_wins_subq.c.win_count, 0).label('wins'))
+            .outerjoin(gc_wins_subq, Rider.rider_id == gc_wins_subq.c.rider_id)
+        )
+        count_query = select(func.count()).select_from(Rider)
+        
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(Rider.rider_name.ilike(search_pattern))
+            count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
+        
+        # 计算总记录数
+        count_result = await db.execute(count_query)
+        total = count_result.scalar() or 0
+        total_pages = (total + limit - 1) // limit
+        offset = (page - 1) * limit
+        
+        # 按冠军数降序，同冠军数按姓名排序
+        result = await db.execute(
+            query.order_by(text('wins DESC'), Rider.rider_name).offset(offset).limit(limit)
+        )
+        rows = result.all()
+        riders_data = [{"rider_id": row[0].rider_id, "rider_name": row[0].rider_name, "wins": row[1]} for row in rows]
+        
+    else:
+        # 默认按姓名排序
+        query = select(Rider)
+        count_query = select(func.count()).select_from(Rider)
+        
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(Rider.rider_name.ilike(search_pattern))
+            count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
+        
+        # 计算总记录数
+        count_result = await db.execute(count_query)
+        total = count_result.scalar() or 0
+        total_pages = (total + limit - 1) // limit
+        offset = (page - 1) * limit
+        
+        result = await db.execute(
+            query.order_by(Rider.rider_name).offset(offset).limit(limit)
+        )
+        riders = result.scalars().all()
+        riders_data = [rider.to_dict() for rider in riders]
     
     return {
-        "data": [rider.to_dict() for rider in riders],
+        "data": riders_data,
         "pagination": {
             "total": total,
             "page": page,
@@ -363,6 +526,20 @@ async def get_rider_detail_async(rider_id: int, db: AsyncSession = Depends(get_a
     )
     stage_wins = wins_result.scalar() or 0
     
+    # 统计 GC 冠军数
+    gc_wins_result = await db.execute(
+        select(func.count(GeneralClassification.gc_id))
+        .filter(GeneralClassification.rider_id == rider.rider_id, GeneralClassification.rank == 1)
+    )
+    gc_wins = gc_wins_result.scalar() or 0
+
+    # 统计 GC 参赛次数 (总成绩排名次数)
+    gc_entries_result = await db.execute(
+        select(func.count(GeneralClassification.gc_id))
+        .filter(GeneralClassification.rider_id == rider.rider_id)
+    )
+    total_gc_entries = gc_entries_result.scalar() or 0
+    
     # 获取效力过的所有车队（去重）
     teams_result = await db.execute(
         select(Team)
@@ -377,6 +554,8 @@ async def get_rider_detail_async(rider_id: int, db: AsyncSession = Depends(get_a
         "stats": {
             "total_races": total_races,
             "stage_wins": stage_wins,
+            "gc_wins": gc_wins,
+            "total_gc_entries": total_gc_entries,
             "teams": teams
         }
     }
@@ -501,7 +680,102 @@ async def get_rider_wins_async(rider_id: int, db: AsyncSession = Depends(get_asy
             "team_name": team.team_name if team else "Unknown"
         })
     
-    return {"rider": rider.to_dict(), "win_records": win_records}
+    # 获取 GC 冠军记录
+    gc_result = await db.execute(
+        select(GeneralClassification)
+        .options(
+            selectinload(GeneralClassification.edition).selectinload(Edition.race),
+            selectinload(GeneralClassification.team)
+        )
+        .filter(GeneralClassification.rider_id == rider.rider_id, GeneralClassification.rank == 1)
+        .join(Edition, GeneralClassification.edition_id == Edition.edition_id)
+        .order_by(Edition.year.desc())
+    )
+    gc_wins = gc_result.scalars().all()
+    
+    gc_win_records = []
+    for win in gc_wins:
+        edition = win.edition
+        race = edition.race
+        team = win.team
+        
+        gc_win_records.append({
+            "gc_id": win.gc_id,
+            "race_name": race.race_name,
+            "year": edition.year,
+            "time_in_seconds": win.time_in_seconds,
+            "team_name": team.team_name if team else "Unknown"
+        })
+    
+    return {"rider": rider.to_dict(), "win_records": win_records, "gc_win_records": gc_win_records}
+
+
+@app.get("/api/async/riders/{rider_id}/gc-history", response_model=PaginatedGCResponse, tags=["Riders (Async)"])
+@cache_response("rider_gc_history_async", expire=1800)
+async def get_rider_gc_history_async(
+    rider_id: int, 
+    page: int = 1, 
+    limit: int = 20, 
+    db: AsyncSession = Depends(get_async_db)
+):
+    """获取车手的历年总成绩排名 - 异步版本"""
+    result = await db.execute(select(Rider).filter(Rider.rider_id == rider_id))
+    rider = result.scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    # Count
+    count_result = await db.execute(
+        select(func.count()).select_from(GeneralClassification).filter(GeneralClassification.rider_id == rider_id)
+    )
+    total = count_result.scalar() or 0
+    
+    # Pagination
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # Query
+    result = await db.execute(
+        select(GeneralClassification)
+        .options(
+            selectinload(GeneralClassification.edition).selectinload(Edition.race),
+            selectinload(GeneralClassification.team)
+        )
+        .filter(GeneralClassification.rider_id == rider_id)
+        .join(Edition, GeneralClassification.edition_id == Edition.edition_id)
+        .order_by(Edition.year.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    results = result.scalars().all()
+    
+    data = []
+    for res in results:
+        data.append({
+            "gc_id": res.gc_id,
+            "edition_id": res.edition_id,
+            "rider_id": res.rider_id,
+            "team_id": res.team_id,
+            "rank": res.rank,
+            "time_in_seconds": res.time_in_seconds,
+            "gap_in_seconds": res.gap_in_seconds,
+            "rider_name": rider.rider_name,
+            "team_name": res.team.team_name if res.team else None,
+            "race_name": res.edition.race.race_name,
+            "year": res.edition.year
+        })
+        
+    return {
+        "data": data,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
 # ============ 异步认证相关 API ============
@@ -1394,24 +1668,568 @@ async def get_my_all_ratings(
     }
 
 
-# ============ 受保护的论坛端点（示例）============
-
-
-@app.get("/api/forum/posts", tags=["Forum"])
-def get_forum_posts(current_user: User = Depends(get_current_user)):
+@app.get("/api/auth/my-posts", response_model=PaginatedForumPostsResponse, tags=["Authentication"])
+async def get_my_forum_posts(
+    page: int = 1,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
     """
-    获取论坛帖子列表（需要登录）
-    这是一个示例端点，用于测试 JWT 认证功能
+    获取当前用户发表的所有帖子
+    
+    参数:
+    - page: 页码，从 1 开始
+    - limit: 每页记录数，默认 10
     """
+    # 计算总记录数（排除已删除的帖子）
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(ForumPost)
+        .filter(
+            ForumPost.author_id == current_user.user_id,
+            ForumPost.is_deleted == False
+        )
+    )
+    total = count_result.scalar() or 0
+    
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+    
+    # 查询帖子数据（预加载作者信息）
+    result = await db.execute(
+        select(ForumPost)
+        .options(selectinload(ForumPost.author))
+        .filter(
+            ForumPost.author_id == current_user.user_id,
+            ForumPost.is_deleted == False
+        )
+        .order_by(ForumPost.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    posts = result.scalars().all()
+    
+    # 构建响应数据，获取实时浏览量
+    posts_data = []
+    for post in posts:
+        post_dict = post.to_dict()
+        post_dict['author_nickname'] = post.author.nickname if post.author else None
+        post_dict['author_avatar'] = post.author.avatar if post.author else None
+        # 获取总浏览量（MySQL + Redis）
+        total_view_count = await get_total_view_count(db, post.post_id)
+        post_dict['view_count'] = total_view_count
+        posts_data.append(post_dict)
+    
     return {
-        "message": f"欢迎 {current_user.nickname}！这是论坛帖子列表。",
-        "user": current_user.to_dict(),
-        "posts": [
-            {"id": 1, "title": "环法自行车赛观后感", "author": "车迷小王", "content": "今年的环法真精彩！"},
-            {"id": 2, "title": "讨论：谁是最伟大的车手？", "author": "骑行爱好者", "content": "我觉得是..."},
-            {"id": 3, "title": "2025赛季展望", "author": "资深车迷", "content": "期待新赛季的比赛！"}
-        ]
+        "data": posts_data,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
     }
+
+
+# ============ 论坛功能 API ============
+
+@app.post("/api/async/forum/posts", response_model=ForumPostWithAuthor, tags=["Forum"])
+@limiter.limit("10/minute")
+async def create_forum_post(
+    request: Request,
+    response: Response,
+    post_data: ForumPostCreate,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """创建新帖子
+
+    限流：每个 IP 每分钟最多 10 次请求
+    """
+    new_post = ForumPost(
+        title=post_data.title,
+        content=post_data.content,
+        author_id=current_user.user_id,
+        view_count=0,
+        comment_count=0
+    )
+    db.add(new_post)
+    await db.commit()
+    await db.refresh(new_post)
+
+    # 添加作者信息
+    post_dict = new_post.to_dict()
+    post_dict['author_nickname'] = current_user.nickname
+    post_dict['author_avatar'] = current_user.avatar
+
+    return post_dict
+
+
+@app.get("/api/async/forum/posts", response_model=PaginatedForumPostsResponse, tags=["Forum"])
+@cache_response("forum_posts_list", expire=60)
+async def get_forum_posts(
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """获取帖子列表（分页）"""
+    # 计算总记录数（排除已删除的帖子）
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(ForumPost)
+        .filter(ForumPost.is_deleted == False)
+    )
+    total = count_result.scalar() or 0
+
+    # 计算分页参数
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+
+    # 查询帖子数据（预加载作者信息）
+    result = await db.execute(
+        select(ForumPost)
+        .options(selectinload(ForumPost.author))
+        .filter(ForumPost.is_deleted == False)
+        .order_by(ForumPost.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    posts = result.scalars().all()
+
+    # 构建响应数据
+    posts_data = []
+    for post in posts:
+        post_dict = post.to_dict()
+        post_dict['author_nickname'] = post.author.nickname if post.author else None
+        post_dict['author_avatar'] = post.author.avatar if post.author else None
+        posts_data.append(post_dict)
+
+    return {
+        "data": posts_data,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
+
+
+@app.get("/api/async/forum/posts/{post_id}", response_model=ForumPostDetail, tags=["Forum"])
+async def get_forum_post_detail(
+    post_id: int,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """获取帖子详情"""
+    # 查询帖子
+    result = await db.execute(
+        select(ForumPost)
+        .options(selectinload(ForumPost.author))
+        .filter(ForumPost.post_id == post_id)
+    )
+    post = result.scalar_one_or_none()
+
+    if not post or post.is_deleted:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+
+    # 增加浏览量（仅操作 Redis）
+    await increment_view_count(post_id)
+
+    # 获取总浏览量（MySQL + Redis）
+    total_view_count = await get_total_view_count(db, post_id)
+
+    # 构建响应
+    post_dict = post.to_dict()
+    post_dict['author_nickname'] = post.author.nickname if post.author else None
+    post_dict['author_avatar'] = post.author.avatar if post.author else None
+    post_dict['view_count'] = total_view_count
+    post_dict['is_deleted'] = post.is_deleted
+
+    return post_dict
+
+
+@app.delete("/api/async/forum/posts/{post_id}", response_model=MessageResponse, tags=["Forum"])
+async def delete_forum_post(
+    post_id: int,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """删除帖子（软删除）
+    
+    只有帖子作者可以删除自己的帖子
+    """
+    # 查询帖子
+    result = await db.execute(
+        select(ForumPost).filter(ForumPost.post_id == post_id)
+    )
+    post = result.scalar_one_or_none()
+
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+    
+    if post.is_deleted:
+        raise HTTPException(status_code=404, detail="帖子已被删除")
+
+    # 验证权限：只有作者可以删除
+    if post.author_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="无权删除此帖子")
+
+    # 软删除
+    post.is_deleted = True
+    await db.commit()
+
+    # 使缓存失效
+    await invalidate_cache_async("forum_posts_list")
+
+    return {"message": "帖子已删除"}
+
+
+@app.post("/api/async/forum/posts/{post_id}/comments", response_model=CommentWithAuthor, tags=["Forum"])
+@limiter.limit("20/minute")
+async def create_comment(
+    request: Request,
+    response: Response,
+    post_id: int,
+    comment_data: CommentCreate,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """创建评论（支持多级嵌套）
+
+    限流：每个 IP 每分钟最多 20 次请求
+    """
+    # 验证帖子是否存在
+    post_result = await db.execute(
+        select(ForumPost).filter(ForumPost.post_id == post_id, ForumPost.is_deleted == False)
+    )
+    post = post_result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+
+    floor_number = None
+    root_id = None
+
+    if comment_data.parent_id:
+        # 子回复
+        parent_result = await db.execute(
+            select(ForumComment).filter(
+                ForumComment.comment_id == comment_data.parent_id,
+                ForumComment.is_deleted == False
+            )
+        )
+        parent = parent_result.scalar_one_or_none()
+        if not parent:
+            raise HTTPException(status_code=404, detail="父评论不存在")
+
+        # 获取根评论 ID
+        root_id = parent.root_id if parent.root_id else parent.comment_id
+    else:
+        # 一级评论：分配楼层号
+        floor_result = await db.execute(
+            select(func.coalesce(func.max(ForumComment.floor_number), 0))
+            .filter(
+                ForumComment.post_id == post_id,
+                ForumComment.parent_id.is_(None),
+                ForumComment.is_deleted == False
+            )
+        )
+        max_floor = floor_result.scalar() or 0
+        floor_number = max_floor + 1
+
+    # 创建评论
+    new_comment = ForumComment(
+        post_id=post_id,
+        author_id=current_user.user_id,
+        content=comment_data.content,
+        parent_id=comment_data.parent_id,
+        root_id=root_id,
+        floor_number=floor_number
+    )
+    db.add(new_comment)
+
+    # 更新帖子评论计数
+    await db.execute(
+        update(ForumPost)
+        .filter(ForumPost.post_id == post_id)
+        .values(comment_count=ForumPost.comment_count + 1)
+    )
+
+    await db.commit()
+    await db.refresh(new_comment)
+
+    # 添加作者信息
+    comment_dict = new_comment.to_dict()
+    comment_dict['author_nickname'] = current_user.nickname
+    comment_dict['author_avatar'] = current_user.avatar
+    comment_dict['replies'] = []
+
+    # 通过 WebSocket 广播新评论
+    try:
+        await comment_manager.broadcast_to_post(post_id, {
+            "type": "new_comment",
+            "data": comment_dict
+        })
+    except Exception as e:
+        # 广播失败不影响评论创建
+        print(f"WebSocket broadcast failed: {e}")
+
+    return comment_dict
+
+
+@app.get("/api/async/forum/posts/{post_id}/comments", response_model=CommentsResponse, tags=["Forum"])
+async def get_post_comments(
+    post_id: int,
+    page: int = 1,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取帖子评论（树状结构）- 🚀 高性能批量查询优化版
+    
+    性能优化：
+    1. 一次性批量查询所有相关评论（避免 N+1 问题）
+    2. 在内存中构建评论树结构
+    3. 将数据库查询从 O(n) 降到 O(1)，大幅提升并发性能
+    
+    返回格式:
+    {
+        "floors": [
+            {
+                "comment_id": 1,
+                "floor_number": 1,
+                "content": "...",
+                "replies": [
+                    {"comment_id": 2, "content": "...", "replies": []}
+                ]
+            }
+        ],
+        "pagination": {...}
+    }
+    """
+    # 验证帖子是否存在
+    post_result = await db.execute(
+        select(ForumPost).filter(ForumPost.post_id == post_id, ForumPost.is_deleted == False)
+    )
+    post = post_result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+
+    # 只查询一级评论（分页）
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(ForumComment)
+        .filter(
+            ForumComment.post_id == post_id,
+            ForumComment.parent_id.is_(None),
+            ForumComment.is_deleted == False
+        )
+    )
+    total = count_result.scalar() or 0
+
+    total_pages = (total + limit - 1) // limit
+    offset = (page - 1) * limit
+
+    # 查询当前页的一级评论ID（只获取ID，减少数据传输）
+    floor_ids_result = await db.execute(
+        select(ForumComment.comment_id)
+        .filter(
+            ForumComment.post_id == post_id,
+            ForumComment.parent_id.is_(None),
+            ForumComment.is_deleted == False
+        )
+        .order_by(ForumComment.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    floor_ids = [row[0] for row in floor_ids_result.all()]
+
+    if not floor_ids:
+        return {
+            "floors": [],
+            "pagination": {
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages,
+                "has_next": False,
+                "has_prev": page > 1
+            }
+        }
+
+    # 🚀 关键优化：一次性批量查询所有相关评论（包括所有子回复）
+    # 使用 root_id 或 comment_id 快速定位所有相关评论
+    all_comments_result = await db.execute(
+        select(ForumComment)
+        .options(selectinload(ForumComment.author))
+        .filter(
+            ForumComment.post_id == post_id,
+            ForumComment.is_deleted == False,
+            # 查询条件：一级评论 OR 其 root_id 在当前页的一级评论中
+            (ForumComment.comment_id.in_(floor_ids)) | (ForumComment.root_id.in_(floor_ids))
+        )
+        .order_by(ForumComment.created_at)
+    )
+    all_comments = all_comments_result.scalars().all()
+
+    # 在内存中构建评论字典和树结构
+    comment_map = {}  # {comment_id: comment_dict}
+    
+    for comment in all_comments:
+        comment_dict = comment.to_dict()
+        comment_dict['replies'] = []
+        comment_map[comment.comment_id] = comment_dict
+
+    # 构建树结构：将子评论挂载到父评论下
+    floors_data = []
+    for comment in all_comments:
+        if comment.parent_id is None:
+            # 一级评论（楼层）
+            floors_data.append(comment_map[comment.comment_id])
+        else:
+            # 子回复，挂载到父评论下
+            parent = comment_map.get(comment.parent_id)
+            if parent:
+                parent['replies'].append(comment_map[comment.comment_id])
+
+    return {
+        "floors": floors_data,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
+
+
+@app.delete("/api/async/forum/posts/{post_id}/comments/{comment_id}", response_model=MessageResponse, tags=["Forum"])
+async def delete_comment(
+    post_id: int,
+    comment_id: int,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """删除评论（软删除）
+    
+    只有评论作者可以删除自己的评论
+    """
+    # 查询评论
+    result = await db.execute(
+        select(ForumComment).filter(
+            ForumComment.comment_id == comment_id,
+            ForumComment.post_id == post_id
+        )
+    )
+    comment = result.scalar_one_or_none()
+
+    if not comment:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    
+    if comment.is_deleted:
+        raise HTTPException(status_code=404, detail="评论已被删除")
+
+    # 验证权限：只有作者可以删除
+    if comment.author_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="无权删除此评论")
+
+    # 软删除评论
+    comment.is_deleted = True
+
+    # 更新帖子评论计数（减1）
+    await db.execute(
+        update(ForumPost)
+        .filter(ForumPost.post_id == post_id)
+        .values(comment_count=ForumPost.comment_count - 1)
+    )
+
+    await db.commit()
+
+    # 通过 WebSocket 广播评论删除事件
+    try:
+        await comment_manager.broadcast_to_post(post_id, {
+            "type": "delete_comment",
+            "data": {"comment_id": comment_id}
+        })
+    except Exception as e:
+        print(f"WebSocket broadcast failed: {e}")
+
+    return {"message": "评论已删除"}
+
+
+@app.websocket("/ws/forum/posts/{post_id}/comments")
+async def websocket_forum_comments(websocket: WebSocket, post_id: int):
+    """WebSocket endpoint for real-time forum comment updates"""
+    # 验证用户身份（从 query 参数获取 token）
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008, reason="Missing authentication token")
+        return
+
+    # 验证 JWT token（直接解码，不使用 HTTPException）
+    try:
+        from jose import jwt
+        from os import getenv
+
+        SECRET_KEY = getenv("JWT_SECRET_KEY", "cycling_forum_secret_key_change_in_production")
+        ALGORITHM = getenv("JWT_ALGORITHM", "HS256")
+
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        token_type: str = payload.get("type")
+
+        if user_id_str is None or token_type != "access":
+            await websocket.close(code=1008, reason="Invalid token")
+            return
+
+        user_id = int(user_id_str)
+    except Exception as e:
+        await websocket.close(code=1008, reason=f"Authentication failed: {str(e)}")
+        return
+
+    # 现在接受连接
+    await websocket.accept()
+
+    # 验证帖子是否存在
+    try:
+        async for db in get_async_db():
+            post_result = await db.execute(
+                select(ForumPost).filter(ForumPost.post_id == post_id, ForumPost.is_deleted == False)
+            )
+            post = post_result.scalar_one_or_none()
+            if not post:
+                await websocket.close(code=1008, reason="Post not found")
+                return
+            break
+    except Exception as e:
+        await websocket.close(code=1011, reason="Server error")
+        return
+
+    # 连接到 WebSocket 管理器
+    await comment_manager.connect(websocket, post_id)
+
+    try:
+        # 保持连接活跃，处理客户端消息
+        while True:
+            # 接收客户端消息（可用于心跳检测）
+            data = await websocket.receive_text()
+
+            # 处理心跳消息
+            if data == "ping":
+                await websocket.send_text("pong")
+
+    except WebSocketDisconnect:
+        await comment_manager.disconnect(websocket)
+    except Exception as e:
+        await comment_manager.disconnect(websocket)
+
 
 """
 @app.get("/api/stages/{stage_id}/results", response_model=PaginatedStageResultsResponse, tags=["Stages"])

@@ -35,11 +35,28 @@ export interface StageResult {
   team_name?: string // API 内联
 }
 
+/** * 对应后端的 'GeneralClassification' 模型
+ */
+export interface GeneralClassificationResult {
+  gc_id: number
+  edition_id: number
+  rider_id: number
+  team_id: number
+  rank: number
+  time_in_seconds: number
+  gap_in_seconds?: number
+  rider_name?: string
+  team_name?: string
+  race_name?: string
+  year?: number
+}
+
 /** * 对应后端的 'Rider' 模型
  */
 export interface Rider {
   rider_id: number
   rider_name: string
+  wins?: number // 可选，按冠军数排序时返回
 }
 
 /** * 对应后端的 'Team' 模型
@@ -55,6 +72,7 @@ export interface RiderDetail {
   rider: Rider
   total_races: number
   stage_wins: number
+  gc_wins?: number
   teams: Team[]
 }
 
@@ -83,6 +101,15 @@ export interface PaginatedRidersResponse {
 export interface PaginatedStageResultsResponse {
   stage_info: Stage
   data: StageResult[]
+  pagination: PaginationMeta
+}
+
+/** * 分页总成绩响应
+ */
+export interface PaginatedGCResponse {
+  edition_year?: number
+  race_name?: string
+  data: GeneralClassificationResult[]
   pagination: PaginationMeta
 }
 
@@ -125,6 +152,8 @@ export interface ApiRiderDetail {
   stats: {
     total_races: number
     stage_wins: number
+    gc_wins?: number
+    total_gc_entries?: number
     teams: Team[]
   }
 }
@@ -167,6 +196,13 @@ export interface RiderWinRecord {
 export interface ApiRiderWins {
   rider: Rider
   win_records: RiderWinRecord[]
+  gc_win_records?: {
+    gc_id: number
+    race_name: string
+    year: number
+    time_in_seconds: number
+    team_name: string
+  }[]
 }
 
 // --- 用户认证相关类型 ---
@@ -283,10 +319,52 @@ export interface MessageResponse {
  * 论坛帖子（示例）
  */
 export interface ForumPost {
-  id: number
+  post_id: number
   title: string
-  author: string
   content: string
+  author_id: number
+  author_nickname?: string
+  author_avatar?: string
+  view_count: number
+  comment_count: number
+  created_at: string
+  updated_at: string
+  is_deleted?: boolean
+}
+
+export interface ForumPostCreate {
+  title: string
+  content: string
+}
+
+export interface ForumComment {
+  comment_id: number
+  content: string
+  post_id: number
+  author_id: number
+  author_nickname?: string
+  author_avatar?: string
+  floor_number?: number
+  parent_id?: number
+  root_id?: number
+  created_at: string
+  updated_at: string
+  replies: ForumComment[]
+}
+
+export interface CommentCreate {
+  content: string
+  parent_id?: number
+}
+
+export interface PaginatedForumPostsResponse {
+  data: ForumPost[]
+  pagination: PaginationMeta
+}
+
+export interface CommentsResponse {
+  floors: ForumComment[]
+  pagination: PaginationMeta
 }
 // --- 车手评分相关类型 ---
 
@@ -344,5 +422,24 @@ export interface RiderDetailWithRatings {
  */
 export interface PaginatedRatingsResponse {
   data: Rating[]
+  pagination: PaginationMeta
+}
+
+export interface GeneralClassificationResult {
+  gc_id: number
+  edition_id: number
+  rider_id: number
+  team_id: number
+  rank: number
+  time_in_seconds: number
+  gap_in_seconds: number
+  year: number
+  race_name: string
+  rider_name: string
+  team_name: string
+}
+
+export interface PaginatedGCResponse {
+  data: GeneralClassificationResult[]
   pagination: PaginationMeta
 }

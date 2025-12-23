@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '@/assets/common-styles.css'
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Rider, PaginationMeta } from '@/interfaces/types'
@@ -17,6 +18,14 @@ const pageSize = ref<number>(18)
 const pagination = ref<PaginationMeta | null>(null)
 const pageInputValue = ref<string>('')
 
+// 排序相关状态
+const sortBy = ref<string>('name')
+const sortOptions = [
+  { value: 'name', label: '按姓名排序' },
+  { value: 'stage_wins', label: '按赛段冠军数' },
+  { value: 'gc_wins', label: '按总成绩冠军数' },
+]
+
 // 搜索相关状态
 const isSearchMode = ref<boolean>(false)
 let searchDebounceTimer: number | null = null
@@ -26,7 +35,7 @@ const loadRiders = async (page: number = 1, search?: string) => {
   isLoading.value = true
   error.value = null
   try {
-    const response = await fetchRiders(page, pageSize.value, search)
+    const response = await fetchRiders(page, pageSize.value, search, sortBy.value)
     riders.value = response.data
     pagination.value = response.pagination
     currentPage.value = page
@@ -37,6 +46,12 @@ const loadRiders = async (page: number = 1, search?: string) => {
   } finally {
     isLoading.value = false
   }
+}
+
+// 排序变化处理
+const onSortChange = () => {
+  const search = searchQuery.value.trim() || undefined
+  loadRiders(1, search) // 切换排序时回到第一页
 }
 
 // 搜索时直接显示后端返回的结果
@@ -155,24 +170,34 @@ loadRiders()
 </script>
 
 <template>
-  <div class="riders-container">
+  <div class="page-container">
     <!-- 顶部导航栏 -->
     <header class="page-header">
       <button class="back-button" @click="goBack">← 返回主页</button>
       <h1 class="page-title">车手信息</h1>
     </header>
 
-    <!-- 搜索框 -->
+    <!-- 搜索框和排序 -->
     <div class="search-section">
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="搜索车手姓名..."
-          class="search-input"
-        />
-        <span v-if="searchQuery" class="clear-button" @click="searchQuery = ''">✕</span>
+      <div class="search-and-sort">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索车手姓名..."
+            class="search-input"
+          />
+          <span v-if="searchQuery" class="clear-button" @click="searchQuery = ''">✕</span>
+        </div>
+        <div class="sort-box">
+          <label for="sort-select" class="sort-label">排序：</label>
+          <select id="sort-select" v-model="sortBy" @change="onSortChange" class="sort-select">
+            <option v-for="opt in sortOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
       </div>
       <p class="search-hint">
         <span v-if="isSearchMode">
@@ -205,7 +230,11 @@ loadRiders()
       >
         <div class="rider-avatar">{{ rider.rider_name.charAt(0) }}</div>
         <h3 class="rider-name">{{ rider.rider_name }}</h3>
-        <p class="rider-id">ID: {{ rider.rider_id }}</p>
+        <p v-if="sortBy === 'stage_wins'" class="rider-wins">🏆 {{ rider.wins || 0 }} 赛段冠军</p>
+        <p v-else-if="sortBy === 'gc_wins'" class="rider-wins">
+          🥇 {{ rider.wins || 0 }} 总成绩冠军
+        </p>
+        <p v-else class="rider-id">ID: {{ rider.rider_id }}</p>
       </div>
 
       <!-- 无搜索结果 -->
@@ -258,123 +287,7 @@ loadRiders()
 </template>
 
 <style scoped>
-.riders-container {
-  min-height: 100vh;
-  background: linear-gradient(to bottom, #fffbf0, #fff9f0);
-  padding: 2rem;
-  font-family:
-    'Inter',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  margin-bottom: 2rem;
-}
-
-.back-button {
-  padding: 0.75rem 1.25rem;
-  background: white;
-  border: 2px solid #e2e8f0;
-  border-radius: 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.back-button:hover {
-  background: #fbbf24;
-  color: #1e3a8a;
-  border-color: #fbbf24;
-}
-
-.page-title {
-  font-size: 2.5rem;
-  font-weight: 800;
-  color: #1e3a8a;
-}
-
-.search-section {
-  max-width: 600px;
-  margin: 0 auto 3rem;
-}
-
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  background: white;
-  padding: 1rem 1.5rem;
-  border-radius: 9999px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
-  transition: box-shadow 0.2s ease;
-}
-
-.search-box:focus-within {
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
-}
-
-.search-icon {
-  font-size: 1.25rem;
-  color: #94a3b8;
-}
-
-.search-input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-size: 1rem;
-  color: #1e293b;
-}
-
-.search-input::placeholder {
-  color: #cbd5e1;
-}
-
-.clear-button {
-  font-size: 1.25rem;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.clear-button:hover {
-  color: #475569;
-}
-
-.search-hint {
-  margin-top: 0.75rem;
-  text-align: center;
-  color: #64748b;
-  font-size: 0.875rem;
-}
-
-.status-message {
-  max-width: 600px;
-  margin: 2rem auto;
-  padding: 1.5rem;
-  border-radius: 0.75rem;
-  text-align: center;
-  font-weight: 500;
-}
-
-.error-message {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-.loading-message {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
+/* 车手页面特定样式 */
 
 .riders-grid {
   display: grid;
@@ -425,11 +338,11 @@ loadRiders()
   color: #94a3b8;
 }
 
-.no-results {
-  grid-column: 1 / -1;
-  text-align: center;
-  padding: 3rem 1rem;
-  color: #64748b;
+.rider-wins {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f59e0b;
+  margin-top: 0.25rem;
 }
 
 .no-results p {
@@ -437,173 +350,9 @@ loadRiders()
   margin-bottom: 1.5rem;
 }
 
-.reset-button {
-  padding: 0.75rem 1.5rem;
-  background: #fbbf24;
-  color: #1e3a8a;
-  border: none;
-  border-radius: 0.5rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.reset-button:hover {
-  background: #f59e0b;
-}
-
-/* 分页控件样式 */
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 3rem;
-  padding: 2rem 0;
-}
-
-.pagination-button {
-  padding: 0.75rem 1.5rem;
-  background: white;
-  border: 2px solid #e2e8f0;
-  border-radius: 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.pagination-button:hover:not(:disabled) {
-  background: #fbbf24;
-  color: #1e3a8a;
-  border-color: #fbbf24;
-}
-
-.pagination-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.pagination-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.page-numbers {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.page-number {
-  min-width: 40px;
-  height: 40px;
-  padding: 0.5rem;
-  background: white;
-  border: 2px solid #e2e8f0;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.page-number:hover {
-  background: #fef3c7;
-  border-color: #fbbf24;
-}
-
-.page-number.active {
-  background: #fbbf24;
-  color: #1e3a8a;
-  border-color: #fbbf24;
-}
-
-/* 页码输入框样式 */
-.page-input-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: #f8fafc;
-  border-radius: 0.375rem;
-  border: 1px solid #e2e8f0;
-}
-
-.page-input-label {
-  font-size: 0.875rem;
-  color: #64748b;
-  white-space: nowrap;
-}
-
-.page-input {
-  width: 60px;
-  padding: 0.375rem 0.5rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.25rem;
-  font-size: 0.875rem;
-  text-align: center;
-  color: #1e293b;
-  transition: all 0.2s ease;
-}
-
-.page-input:focus {
-  outline: none;
-  border-color: #fbbf24;
-  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.1);
-}
-
-.page-input::placeholder {
-  color: #cbd5e1;
-}
-
-.page-input-unit {
-  font-size: 0.875rem;
-  color: #64748b;
-  white-space: nowrap;
-}
-
 @media (max-width: 768px) {
   .riders-grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  }
-
-  .page-title {
-    font-size: 2rem;
-  }
-
-  .pagination {
-    flex-wrap: wrap;
-    gap: 0.75rem;
-  }
-
-  .pagination-info {
-    flex-direction: column;
-    width: 100%;
-    gap: 0.5rem;
-  }
-
-  .page-numbers {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  .page-input-wrapper {
-    justify-content: center;
-    width: 100%;
-  }
-
-  .page-input {
-    width: 50px;
-    font-size: 0.8rem;
-    padding: 0.3rem 0.4rem;
-  }
-
-  .pagination-button {
-    padding: 0.6rem 1rem;
-    font-size: 0.85rem;
   }
 }
 </style>
