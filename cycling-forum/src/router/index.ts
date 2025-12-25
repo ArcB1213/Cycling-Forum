@@ -73,7 +73,7 @@ const router = createRouter({
       meta: { requiresAuth: true }, // 需要登录
     },
     {
-      path: '/profile',
+      path: '/profile/:userId?',
       name: 'profile',
       component: () => import('../views/UserProfileView.vue'),
       meta: { requiresAuth: true }, // 需要登录

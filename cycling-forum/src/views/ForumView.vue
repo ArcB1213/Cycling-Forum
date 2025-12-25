@@ -3,6 +3,7 @@
     <div class="forum-header">
       <h1>🏁 自行车论坛</h1>
       <div class="header-actions">
+        <button @click="goToMain" class="btn-back-forum">返回首页</button>
         <button @click="goToCreatePost" class="btn-create">+ 发帖</button>
         <div class="user-info" @click="navigateToProfile">
           <span>{{ user?.nickname }}</span>
@@ -18,6 +19,20 @@
     </div>
 
     <div v-else class="forum-content">
+      <!-- 排序控制器 -->
+      <div class="sort-controls">
+        <label class="sort-label">排序方式：</label>
+        <select v-model="sortBy" @change="onSortChange" class="sort-select">
+          <option value="created_at">发布时间</option>
+          <option value="comment_count">评论数</option>
+          <option value="view_count">浏览量</option>
+        </select>
+        <select v-model="order" @change="onSortChange" class="sort-select">
+          <option value="desc">降序</option>
+          <option value="asc">升序</option>
+        </select>
+      </div>
+
       <!-- 帖子列表 -->
       <div class="content-card posts-section">
         <div v-if="posts.length === 0" class="empty-state">
@@ -38,7 +53,7 @@
             </div>
             <p class="post-content">{{ truncateContent(post.content) }}</p>
             <div class="post-footer">
-              <div class="post-author">
+              <div class="post-author" @click.stop="goToUserProfile(post.author_id)">
                 <img :src="getAvatarUrl(post.author_avatar)" class="author-avatar" />
                 <span>{{ post.author_nickname || '未知用户' }}</span>
               </div>
@@ -69,22 +84,19 @@
           </button>
         </div>
       </div>
-
-      <div class="back-nav">
-        <router-link to="/" class="btn-home">返回首页</router-link>
-      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import '@/assets/forum-styles.css'
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import apiService, { getAvatarUrl, fetchForumPosts } from '@/services/ApiServices'
 import type { ForumPost, PaginationMeta } from '@/interfaces/types'
 
 const router = useRouter()
+const route = useRoute()
 const isLoading = ref(false)
 const error = ref('')
 const user = ref<User | null>(null)
@@ -97,6 +109,10 @@ const pagination = ref<PaginationMeta>({
   has_next: false,
   has_prev: false,
 })
+
+// 排序状态
+const sortBy = ref<'created_at' | 'comment_count' | 'view_count'>('created_at')
+const order = ref<'asc' | 'desc'>('desc')
 
 const formatDate = (dateString: string) => {
   if (!dateString) return '未知'
@@ -124,7 +140,7 @@ const loadPosts = async (page: number = 1) => {
   error.value = ''
 
   try {
-    const response = await fetchForumPosts(page, 20)
+    const response = await fetchForumPosts(page, 10, sortBy.value, order.value)
     posts.value = response.data
     pagination.value = response.pagination
   } catch (err: unknown) {
@@ -141,6 +157,11 @@ const loadPosts = async (page: number = 1) => {
   } finally {
     isLoading.value = false
   }
+}
+
+// 当排序方式改变时重新加载帖子
+const onSortChange = () => {
+  loadPosts(1) // 重置到第一页
 }
 
 const changePage = (page: number) => {
@@ -170,6 +191,22 @@ const goToPostDetail = (postId: number) => {
   router.push(`/forum/post/${postId}`)
 }
 
+const goToMain = () => {
+  router.push('/')
+}
+
+const goToUserProfile = (authorId: number) => {
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+  // 确保 user_id 是数字类型再比较
+  const currentUserId = Number(currentUser.user_id)
+
+  if (currentUserId === authorId) {
+    router.push('/profile')
+  } else {
+    router.push(`/profile/${authorId}`)
+  }
+}
+
 onMounted(() => {
   const storedUser = localStorage.getItem('user')
   if (storedUser) {
@@ -178,9 +215,60 @@ onMounted(() => {
 
   loadPosts()
 })
+
+// 监听路由变化，当从其他页面返回时自动刷新帖子列表
+watch(
+  () => route.path,
+  (newPath) => {
+    // 只在进入论坛页面时刷新
+    if (newPath === '/forum') {
+      loadPosts()
+    }
+  }
+)
 </script>
 
 <style scoped>
+/* 排序控制器样式 */
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: white;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.sort-label {
+  font-weight: 600;
+  color: #333;
+  font-size: 15px;
+}
+
+.sort-select {
+  padding: 8px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sort-select:hover {
+  border-color: #ffed00;
+}
+
+.sort-select:focus {
+  outline: none;
+  border-color: #ffed00;
+  box-shadow: 0 0 0 3px rgba(255, 237, 0, 0.1);
+}
+
 /* 帖子列表特定样式 */
 .empty-state {
   text-align: center;
@@ -270,6 +358,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.post-author:hover {
+  opacity: 0.7;
 }
 
 .author-avatar {
@@ -287,38 +381,5 @@ onMounted(() => {
 .stat {
   font-size: 14px;
   color: #888;
-}
-
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 20px;
-  margin-top: 30px;
-}
-
-.btn-page {
-  padding: 8px 20px;
-  background: #ff286e;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: background 0.3s;
-}
-
-.btn-page:hover:not(:disabled) {
-  background: #ff286e;
-}
-
-.btn-page:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-.page-info {
-  color: #555;
-  font-weight: 600;
 }
 </style>

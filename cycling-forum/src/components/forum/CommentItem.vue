@@ -1,9 +1,15 @@
 <template>
   <div :class="['comment-item', depth > 0 ? 'reply' : 'floor']">
     <div class="comment-header">
-      <img :src="getAvatarUrl(comment.author_avatar)" class="avatar" />
+      <img
+        :src="getAvatarUrl(comment.author_avatar)"
+        class="avatar"
+        @click.stop="handleAuthorClick"
+      />
       <div class="comment-meta">
-        <span class="author">{{ comment.author_nickname || '未知用户' }}</span>
+        <span class="author" @click.stop="handleAuthorClick">{{
+          comment.author_nickname || '未知用户'
+        }}</span>
         <span v-if="comment.floor_number" class="floor-number">#{{ comment.floor_number }}</span>
         <span class="time">{{ formatTime(comment.created_at) }}</span>
       </div>
@@ -29,6 +35,7 @@
         @reply="$emit('reply', $event)"
         @delete="$emit('delete', $event)"
         @refresh="$emit('refresh')"
+        @author-click="$emit('author-click', $event)"
       />
     </div>
   </div>
@@ -48,7 +55,13 @@ const emit = defineEmits<{
   reply: [commentId: number]
   delete: [commentId: number]
   refresh: []
+  'author-click': [authorId: number]
 }>()
+
+// 点击作者头像或名称
+const handleAuthorClick = () => {
+  emit('author-click', props.comment.author_id)
+}
 
 const formatTime = (dateString: string) => {
   if (!dateString) return '未知'
@@ -112,6 +125,12 @@ const isCommentAuthor = () => {
   height: 36px;
   border-radius: 50%;
   object-fit: cover;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.avatar:hover {
+  opacity: 0.7;
 }
 
 .comment-meta {
@@ -124,6 +143,12 @@ const isCommentAuthor = () => {
 .author {
   font-weight: 600;
   color: #333;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.author:hover {
+  opacity: 0.7;
 }
 
 .floor-number {

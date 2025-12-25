@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import '@/assets/common-styles.css'
+import '@/assets/forum-styles.css'
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import type {
@@ -322,6 +322,18 @@ onMounted(() => {
         </div>
 
         <div
+          class="stat-card"
+          :class="{ active: activeTab === 'gc' }"
+          @click="setActiveTab('gc')"
+          role="button"
+          tabindex="0"
+        >
+          <div class="stat-icon">📊</div>
+          <div class="stat-value">{{ riderDetail.stats.total_gc_entries || 0 }}</div>
+          <div class="stat-label">总成绩排名历史</div>
+        </div>
+
+        <div
           class="stat-card highlight-card"
           :class="{ active: activeTab === 'wins' }"
           @click="setActiveTab('wins')"
@@ -333,18 +345,6 @@ onMounted(() => {
             {{ riderDetail.stats.stage_wins }} | {{ riderDetail.stats.gc_wins }}
           </div>
           <div class="stat-label">赛段冠军 | 总冠军</div>
-        </div>
-
-        <div
-          class="stat-card"
-          :class="{ active: activeTab === 'gc' }"
-          @click="setActiveTab('gc')"
-          role="button"
-          tabindex="0"
-        >
-          <div class="stat-icon">📊</div>
-          <div class="stat-value">{{ riderDetail.stats.total_gc_entries || 0 }}</div>
-          <div class="stat-label">总成绩排名</div>
         </div>
 
         <div

@@ -55,7 +55,7 @@ onMounted(async () => {
     races.value = await fetchRaces()
   } catch (err) {
     console.error(err)
-    error.value = '无法连接到服务器。请确保 Flask 后端正在运行。'
+    error.value = '无法连接到服务器。请确保后端正在运行。'
   } finally {
     isLoadingRaces.value = false
   }

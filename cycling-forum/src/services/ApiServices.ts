@@ -340,14 +340,16 @@ export const updatePassword = async (
 }
 
 /**
- * 获取论坛帖子列表（分页）
+ * 获取论坛帖子列表（分页，支持排序）
  */
 export const fetchForumPosts = async (
   page = 1,
   limit = 20,
+  sortBy: 'created_at' | 'comment_count' | 'view_count' = 'created_at',
+  order: 'asc' | 'desc' = 'desc',
 ): Promise<PaginatedForumPostsResponse> => {
   const response = await apiClient.get<PaginatedForumPostsResponse>('/async/forum/posts', {
-    params: { page, limit },
+    params: { page, limit, sort_by: sortBy, order },
   })
   return response.data
 }
@@ -568,6 +570,57 @@ export const fetchMyForumPosts = async (
   return response.data
 }
 
+// ============ 用户主页相关 API ============
+
+/**
+ * 获取指定用户的公开信息（不含email等隐私信息）
+ * @param userId - 用户ID
+ */
+export const fetchUserById = async (userId: number): Promise<User> => {
+  const response = await apiClient.get<User>(`/async/users/${userId}`)
+  return response.data
+}
+
+/**
+ * 获取指定用户的评价列表（分页）
+ * @param userId - 用户ID
+ * @param page - 页码
+ * @param limit - 每页记录数
+ */
+export const fetchUserRatings = async (
+  userId: number,
+  page = 1,
+  limit = 10,
+): Promise<PaginatedRatingsResponse> => {
+  const response = await apiClient.get<PaginatedRatingsResponse>(
+    `/async/users/${userId}/ratings`,
+    {
+      params: { page, limit },
+    },
+  )
+  return response.data
+}
+
+/**
+ * 获取指定用户的帖子列表（分页）
+ * @param userId - 用户ID
+ * @param page - 页码
+ * @param limit - 每页记录数
+ */
+export const fetchUserPosts = async (
+  userId: number,
+  page = 1,
+  limit = 10,
+): Promise<PaginatedForumPostsResponse> => {
+  const response = await apiClient.get<PaginatedForumPostsResponse>(
+    `/async/users/${userId}/posts`,
+    {
+      params: { page, limit },
+    },
+  )
+  return response.data
+}
+
 // 默认导出所有 API 方法
 export default {
   fetchRaces,
@@ -609,4 +662,7 @@ export default {
   fetchEditionGCResults,
   fetchRiderGCHistory,
   fetchMyForumPosts,
+  fetchUserById,
+  fetchUserRatings,
+  fetchUserPosts,
 }

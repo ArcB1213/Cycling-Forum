@@ -2,33 +2,24 @@
   <div class="profile-container">
     <div class="profile-header">
       <button @click="goBack" class="btn-back">← 返回</button>
-      <h1>个人中心</h1>
+      <h1>{{ isOwner ? '个人中心' : '用户主页' }}</h1>
     </div>
 
-    <div class="profile-content">
-      <!-- 用户信息卡片 -->
-      <div class="info-card">
-        <div class="avatar-section">
-          <div class="avatar-wrapper" @click="showAvatarModal = true" title="点击查看大图">
-            <img :src="getAvatarUrl()" alt="用户头像" class="user-avatar" />
-            <div class="avatar-overlay">
-              <span>查看大图</span>
-            </div>
-          </div>
-          <div class="user-details">
-            <div style="display: flex; align-items: center; gap: 10px">
-              <h2>{{ currentUser?.nickname }}</h2>
-              <button @click="showNicknameModal = true" class="btn-edit">修改</button>
-            </div>
-            <p class="user-email">{{ currentUser?.email }}</p>
-            <p class="user-date">注册时间: {{ formatDate(currentUser?.created_at) }}</p>
-            <span v-if="currentUser?.is_verified" class="badge-verified">✓ 已验证</span>
-          </div>
-        </div>
-      </div>
+    <div v-if="isLoadingUser" class="loading-container">加载中...</div>
 
-      <!-- 头像大图模态框 -->
-      <div v-if="showAvatarModal" class="modal-overlay" @click="showAvatarModal = false">
+    <div v-else-if="userError" class="error-container">{{ userError }}</div>
+
+    <div v-else class="profile-content">
+      <!-- 用户信息卡片 -->
+      <UserInfoCard
+        :user="profileUser"
+        :is-owner="isOwner"
+        @edit-nickname="showNicknameModal = true"
+        @edit-avatar="showAvatarModal = true"
+      />
+
+      <!-- 头像大图模态框 (仅本人可见) -->
+      <div v-if="showAvatarModal && isOwner" class="modal-overlay" @click="showAvatarModal = false">
         <div class="modal-content" @click.stop>
           <img :src="getAvatarUrl()" alt="头像大图" class="full-avatar" />
           <div class="modal-actions">
@@ -48,8 +39,8 @@
         </div>
       </div>
 
-      <!-- 修改昵称模态框 -->
-      <div v-if="showNicknameModal" class="modal-overlay" @click="showNicknameModal = false">
+      <!-- 修改昵称模态框 (仅本人可见) -->
+      <div v-if="showNicknameModal && isOwner" class="modal-overlay" @click="showNicknameModal = false">
         <div class="modal-content" @click.stop>
           <h3>修改昵称</h3>
           <form @submit.prevent="handleUpdateNickname" class="form">
@@ -85,193 +76,100 @@
       </div>
 
       <!-- 我的活动 (选项卡) -->
-      <div class="action-card">
-        <div class="tabs-header">
-          <button
-            :class="['tab-button', { active: activeTab === 'ratings' }]"
-            @click="switchTab('ratings')"
-          >
-            🏆 我的评价
-          </button>
-          <button
-            :class="['tab-button', { active: activeTab === 'posts' }]"
-            @click="switchTab('posts')"
-          >
-            📝 我的帖子
-          </button>
-        </div>
-
+      <UserActivityTabs
+        :active-tab="activeTab"
+        :is-owner="isOwner"
+        @switch-tab="switchTab"
+      >
         <!-- 评价列表 -->
-        <div v-show="activeTab === 'ratings'" class="tab-content">
-          <div v-if="isLoadingRatings" class="loading-state">加载中...</div>
-          <div v-else-if="!myRatings || myRatings.data.length === 0" class="empty-state">
-            暂无评价记录
-          </div>
-          <div v-else class="ratings-list">
-            <div
-              v-for="rating in myRatings.data"
-              :key="rating.rating_id"
-              class="rating-card"
-              @click="goToRider(rating.rider_id)"
-            >
-              <div class="rating-card-header">
-                <span class="rider-name">{{ (rating as any).rider_name || '未知车手' }}</span>
-                <span class="rating-stars">{{ getStarRating(rating.score) }}</span>
-              </div>
-              <p class="rating-comment">{{ rating.comment || '无文字评价' }}</p>
-              <span class="rating-time">{{ formatDate(rating.created_at) }}</span>
-            </div>
-
-            <!-- 分页 -->
-            <div v-if="myRatings.pagination.total_pages > 1" class="pagination">
-              <button
-                :disabled="!myRatings.pagination.has_prev"
-                @click="loadMyRatings(myRatings.pagination.page - 1)"
-              >
-                上一页
-              </button>
-              <span
-                >第 {{ myRatings.pagination.page }} /
-                {{ myRatings.pagination.total_pages }} 页</span
-              >
-              <button
-                :disabled="!myRatings.pagination.has_next"
-                @click="loadMyRatings(myRatings.pagination.page + 1)"
-              >
-                下一页
-              </button>
-            </div>
-          </div>
-        </div>
+        <UserRatingsList
+          :active-tab="activeTab"
+          :ratings="ratings"
+          :is-loading="isLoadingRatings"
+          :is-owner="isOwner"
+          @go-to-rider="goToRider"
+          @load-page="loadRatingsPage"
+        />
 
         <!-- 帖子列表 -->
-        <div v-show="activeTab === 'posts'" class="tab-content">
-          <div v-if="isLoadingPosts" class="loading-state">加载中...</div>
-          <div v-else-if="!myPosts || myPosts.data.length === 0" class="empty-state">
-            暂无发帖记录
-          </div>
-          <div v-else class="posts-list">
-            <div
-              v-for="post in myPosts.data"
-              :key="post.post_id"
-              class="post-card"
-              @click="goToPost(post.post_id)"
-            >
-              <div class="post-card-header">
-                <h4 class="post-title">{{ post.title }}</h4>
-                <span class="post-time">{{ formatDateTime(post.created_at) }}</span>
-              </div>
-              <p class="post-preview">
-                {{ post.content.substring(0, 100) }}{{ post.content.length > 100 ? '...' : '' }}
-              </p>
-              <div class="post-stats">
-                <span>👁 {{ post.view_count }}</span>
-                <span>💬 {{ post.comment_count }}</span>
-              </div>
-            </div>
+        <UserPostsList
+          :active-tab="activeTab"
+          :posts="posts"
+          :is-loading="isLoadingPosts"
+          :is-owner="isOwner"
+          @go-to-post="goToPost"
+          @load-page="loadPostsPage"
+        />
+      </UserActivityTabs>
 
-            <!-- 分页 -->
-            <div v-if="myPosts.pagination.total_pages > 1" class="pagination">
-              <button
-                :disabled="!myPosts.pagination.has_prev"
-                @click="loadMyPosts(myPosts.pagination.page - 1)"
-              >
-                上一页
-              </button>
-              <span
-                >第 {{ myPosts.pagination.page }} / {{ myPosts.pagination.total_pages }} 页</span
-              >
-              <button
-                :disabled="!myPosts.pagination.has_next"
-                @click="loadMyPosts(myPosts.pagination.page + 1)"
-              >
-                下一页
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 修改密码 -->
-      <div class="action-card">
-        <h3>修改密码</h3>
-        <form @submit.prevent="handleUpdatePassword" class="form">
-          <div class="form-group">
-            <label for="old-password">当前密码</label>
-            <input
-              id="old-password"
-              v-model="passwordForm.oldPassword"
-              type="password"
-              placeholder="请输入当前密码"
-              :disabled="isUpdatingPassword"
-              autocomplete="current-password"
-            />
-          </div>
-          <div class="form-group">
-            <label for="new-password">新密码</label>
-            <input
-              id="new-password"
-              v-model="passwordForm.newPassword"
-              type="password"
-              placeholder="请输入新密码 (至少6位)"
-              :disabled="isUpdatingPassword"
-              autocomplete="new-password"
-            />
-          </div>
-          <div class="form-group">
-            <label for="confirm-password">确认新密码</label>
-            <input
-              id="confirm-password"
-              v-model="passwordForm.confirmPassword"
-              type="password"
-              placeholder="请再次输入新密码"
-              :disabled="isUpdatingPassword"
-              autocomplete="new-password"
-            />
-          </div>
-          <span v-if="passwordError" class="error-message">{{ passwordError }}</span>
-          <button type="submit" class="btn-primary" :disabled="isUpdatingPassword">
-            {{ isUpdatingPassword ? '修改中...' : '修改密码' }}
-          </button>
-          <div v-if="passwordSuccess" class="success-message">密码修改成功！</div>
-        </form>
-      </div>
+      <!-- 修改密码 (仅本人可见) -->
+      <PasswordChangeCard v-if="isOwner" @success="handlePasswordSuccess" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import apiService from '@/services/ApiServices'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import apiService, { getAvatarUrl as apiGetAvatarUrl } from '@/services/ApiServices'
 import type {
   User,
   PaginatedRatingsResponse,
   PaginatedForumPostsResponse,
 } from '@/interfaces/types'
+import UserInfoCard from '@/components/profile/UserInfoCard.vue'
+import UserActivityTabs from '@/components/profile/UserActivityTabs.vue'
+import UserRatingsList from '@/components/profile/UserRatingsList.vue'
+import UserPostsList from '@/components/profile/UserPostsList.vue'
+import PasswordChangeCard from '@/components/profile/PasswordChangeCard.vue'
 
 const router = useRouter()
-const currentUser = ref<User | null>(null)
-const fileInput = ref<HTMLInputElement | null>(null)
+const route = useRoute()
 
+// 当前登录用户
+const currentUser = ref<User | null>(null)
+// 要展示的用户（可能是自己，也可能是访客）
+const profileUser = ref<User | null>(null)
+
+// 目标用户ID
+const targetUserId = computed(() => {
+  const userId = route.params.userId as string | undefined
+  if (userId) {
+    return Number(userId)
+  }
+  return currentUser.value?.user_id
+})
+
+// 是否为本人
+const isOwner = computed(() => {
+  // 如果没有路由参数，说明访问的是 /profile，显示本人主页
+  if (!route.params.userId) {
+    return true
+  }
+  // 有路由参数，判断是否与当前登录用户相同
+  return currentUser.value?.user_id === targetUserId.value
+})
+
+// 加载状态
+const isLoadingUser = ref(false)
+const userError = ref('')
+
+const fileInput = ref<HTMLInputElement | null>(null)
 const isUpdatingNickname = ref(false)
-const isUpdatingPassword = ref(false)
 const isUpdatingAvatar = ref(false)
 const showAvatarModal = ref(false)
 const showNicknameModal = ref(false)
 
 const nicknameError = ref('')
-const passwordError = ref('')
 const avatarError = ref('')
 const nicknameSuccess = ref(false)
-const passwordSuccess = ref(false)
 
 // 用户评价数据
-const myRatings = ref<PaginatedRatingsResponse | null>(null)
+const ratings = ref<PaginatedRatingsResponse | null>(null)
 const isLoadingRatings = ref(false)
 
 // 用户帖子数据
-const myPosts = ref<PaginatedForumPostsResponse | null>(null)
+const posts = ref<PaginatedForumPostsResponse | null>(null)
 const isLoadingPosts = ref(false)
 
 // 选项卡状态：'ratings' 或 'posts'
@@ -281,17 +179,11 @@ const nicknameForm = reactive({
   nickname: '',
 })
 
-const passwordForm = reactive({
-  oldPassword: '',
-  newPassword: '',
-  confirmPassword: '',
-})
-
 onMounted(async () => {
+  // 加载当前登录用户
   const userStr = localStorage.getItem('user')
   if (userStr) {
     currentUser.value = JSON.parse(userStr)
-    nicknameForm.nickname = currentUser.value?.nickname || ''
   }
 
   // 如果没有登录，跳转到登录页
@@ -300,14 +192,51 @@ onMounted(async () => {
     return
   }
 
+  // 加载目标用户信息
+  await loadProfileUser()
+
+  // 如果是本人，初始化昵称表单
+  if (isOwner.value && currentUser.value) {
+    nicknameForm.nickname = currentUser.value.nickname || ''
+  }
+
   // 加载用户评价
-  loadMyRatings()
+  loadRatings()
 })
 
-const loadMyRatings = async (page = 1) => {
+const loadProfileUser = async () => {
+  isLoadingUser.value = true
+  userError.value = ''
+
+  try {
+    if (isOwner.value) {
+      // 本人模式：使用当前登录用户信息
+      profileUser.value = currentUser.value
+    } else {
+      // 访客模式：从API获取目标用户信息
+      profileUser.value = await apiService.fetchUserById(targetUserId.value!)
+    }
+  } catch (error: unknown) {
+    console.error('加载用户信息失败:', error)
+    const err = error as { response?: { status?: number; data?: { detail?: string } } }
+    if (err.response?.status === 404) {
+      userError.value = '用户不存在'
+    } else {
+      userError.value = err.response?.data?.detail || '加载失败'
+    }
+  } finally {
+    isLoadingUser.value = false
+  }
+}
+
+const loadRatings = async (page = 1) => {
   isLoadingRatings.value = true
   try {
-    myRatings.value = await apiService.fetchMyAllRatings(page, 10)
+    if (isOwner.value) {
+      ratings.value = await apiService.fetchMyAllRatings(page, 10)
+    } else {
+      ratings.value = await apiService.fetchUserRatings(targetUserId.value!, page, 10)
+    }
   } catch (error) {
     console.error('加载评价失败:', error)
   } finally {
@@ -315,10 +244,14 @@ const loadMyRatings = async (page = 1) => {
   }
 }
 
-const loadMyPosts = async (page = 1) => {
+const loadPosts = async (page = 1) => {
   isLoadingPosts.value = true
   try {
-    myPosts.value = await apiService.fetchMyForumPosts(page, 10)
+    if (isOwner.value) {
+      posts.value = await apiService.fetchMyForumPosts(page, 10)
+    } else {
+      posts.value = await apiService.fetchUserPosts(targetUserId.value!, page, 10)
+    }
   } catch (error) {
     console.error('加载帖子失败:', error)
   } finally {
@@ -326,10 +259,18 @@ const loadMyPosts = async (page = 1) => {
   }
 }
 
+const loadRatingsPage = (page: number) => {
+  loadRatings(page)
+}
+
+const loadPostsPage = (page: number) => {
+  loadPosts(page)
+}
+
 const switchTab = (tab: 'ratings' | 'posts') => {
   activeTab.value = tab
-  if (tab === 'posts' && !myPosts.value) {
-    loadMyPosts()
+  if (tab === 'posts' && !posts.value) {
+    loadPosts()
   }
 }
 
@@ -346,7 +287,7 @@ const goToRider = (riderId: number) => {
 }
 
 const getAvatarUrl = () => {
-  return apiService.getAvatarUrl(currentUser.value?.avatar)
+  return apiGetAvatarUrl(profileUser.value?.avatar)
 }
 
 const triggerFileInput = () => {
@@ -376,16 +317,14 @@ const handleAvatarChange = async (event: Event) => {
   try {
     const updatedUser = await apiService.updateUserAvatar(file)
     currentUser.value = updatedUser
+    profileUser.value = updatedUser
     localStorage.setItem('user', JSON.stringify(updatedUser))
-    // 成功后可以关闭模态框或者保持开启
-    // showAvatarModal.value = false
   } catch (error: unknown) {
     console.error('修改头像失败:', error)
     const err = error as { response?: { data?: { detail?: string } } }
     avatarError.value = err.response?.data?.detail || '上传失败，请稍后重试'
   } finally {
     isUpdatingAvatar.value = false
-    // 清空 input，以便下次选择同一文件也能触发 change
     if (fileInput.value) fileInput.value.value = ''
   }
 }
@@ -399,7 +338,7 @@ const handleUpdateNickname = async () => {
     return
   }
 
-  if (nicknameForm.nickname === currentUser.value?.nickname) {
+  if (nicknameForm.nickname === profileUser.value?.nickname) {
     nicknameError.value = '新昵称与当前昵称相同'
     return
   }
@@ -409,6 +348,7 @@ const handleUpdateNickname = async () => {
   try {
     const updatedUser = await apiService.updateNickname(nicknameForm.nickname)
     currentUser.value = updatedUser
+    profileUser.value = updatedUser
     localStorage.setItem('user', JSON.stringify(updatedUser))
     nicknameSuccess.value = true
     setTimeout(() => {
@@ -424,74 +364,24 @@ const handleUpdateNickname = async () => {
   }
 }
 
-const formatDate = (dateStr?: string) => {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleDateString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
+const handlePasswordSuccess = () => {
+  // 密码修改成功的回调（可选）
+  console.log('密码修改成功')
 }
 
-const formatDateTime = (dateStr?: string) => {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+// 监听路由参数变化，当 userId 改变时重新加载数据
+watch(
+  () => route.params.userId,
+  async () => {
+    // 重新加载用户信息
+    await loadProfileUser()
 
-const getStarRating = (score: number) => {
-  return '★'.repeat(score) + '☆'.repeat(5 - score)
-}
-
-const handleUpdatePassword = async () => {
-  passwordError.value = ''
-  passwordSuccess.value = false
-
-  if (!passwordForm.oldPassword) {
-    passwordError.value = '请输入当前密码'
-    return
+    // 重新加载评价和帖子
+    activeTab.value = 'ratings'
+    loadRatings()
+    posts.value = null // 清空帖子数据，切换到评价 tab 时才会加载
   }
-
-  if (passwordForm.newPassword.length < 6) {
-    passwordError.value = '新密码至少需要 6 个字符'
-    return
-  }
-
-  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    passwordError.value = '两次输入的新密码不一致'
-    return
-  }
-
-  if (passwordForm.oldPassword === passwordForm.newPassword) {
-    passwordError.value = '新密码不能与当前密码相同'
-    return
-  }
-
-  isUpdatingPassword.value = true
-
-  try {
-    await apiService.updatePassword(passwordForm.oldPassword, passwordForm.newPassword)
-    passwordSuccess.value = true
-    // 清空表单
-    passwordForm.oldPassword = ''
-    passwordForm.newPassword = ''
-    passwordForm.confirmPassword = ''
-    setTimeout(() => {
-      passwordSuccess.value = false
-    }, 3000)
-  } catch (error: unknown) {
-    console.error('修改密码失败:', error)
-    const err = error as { response?: { data?: { detail?: string } } }
-    passwordError.value = err.response?.data?.detail || '修改失败，请稍后重试'
-  } finally {
-    isUpdatingPassword.value = false
-  }
-}
+)
 </script>
 
 <style scoped>
@@ -526,23 +416,6 @@ const handleUpdatePassword = async () => {
   transform: translateX(-4px);
 }
 
-.btn-edit {
-  padding: 4px 12px;
-  background: #f0f0f0;
-  color: #333;
-  border: none;
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.btn-edit:hover {
-  background: #da291c;
-  color: white;
-}
-
 .profile-header h1 {
   color: rgb(5, 5, 5);
   font-size: 32px;
@@ -556,146 +429,79 @@ const handleUpdatePassword = async () => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  padding-bottom: 40px;
 }
 
-.info-card,
-.action-card {
+.loading-container,
+.error-container {
+  max-width: 800px;
+  margin: 40px auto;
+  text-align: center;
+  padding: 40px;
   background: white;
   border-radius: 12px;
-  padding: 30px;
+  font-size: 16px;
+  color: #666;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
 }
 
-.avatar-section {
-  display: flex;
-  align-items: center;
-  gap: 25px;
+.error-container {
+  color: #e74c3c;
 }
 
-.avatar-wrapper {
-  position: relative;
-  cursor: pointer;
-  border-radius: 50%;
-  overflow: hidden;
-  width: 200px;
-  height: 200px;
-  border: 4px solid #ff286e;
-  transition: transform 0.3s;
-}
-
-.avatar-wrapper:hover {
-  transform: scale(1.05);
-}
-
-.avatar-overlay {
-  position: absolute;
+/* 模态框 */
+.modal-overlay {
+  position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.3s;
+  z-index: 1000;
+  backdrop-filter: blur(5px);
 }
 
-.avatar-wrapper:hover .avatar-overlay {
-  opacity: 1;
+.modal-content {
+  background: white;
+  padding: 20px;
+  border-radius: 16px;
+  max-width: 90%;
+  max-height: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
-.avatar-overlay span {
-  color: white;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.user-avatar {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.user-details h2 {
-  font-size: 24px;
-  font-weight: 700;
-  color: #333;
-  margin: 0 0 8px 0;
-}
-
-.user-email {
-  font-size: 15px;
-  color: #666;
-  margin: 0 0 4px 0;
-}
-
-.user-date {
-  font-size: 13px;
-  color: #999;
-  margin: 0 0 8px 0;
-}
-
-.badge-verified {
-  display: inline-block;
-  padding: 4px 10px;
-  background: #27ae60;
-  color: white;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.action-card h3 {
+.modal-content h3 {
+  margin: 0;
   font-size: 20px;
   font-weight: 700;
   color: #333;
-  margin: 0 0 20px 0;
-  padding-bottom: 15px;
-  border-bottom: 2px solid #f0f0f0;
 }
 
-.tabs-header {
+.full-avatar {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.modal-actions {
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-  border-bottom: 2px solid #f0f0f0;
+  gap: 15px;
 }
 
-.tab-button {
-  padding: 12px 24px;
-  background: transparent;
-  border: none;
-  border-bottom: 3px solid transparent;
-  font-size: 16px;
-  font-weight: 600;
-  color: #666;
-  cursor: pointer;
-  transition: all 0.3s;
+.modal-actions button {
+  flex: 1;
 }
 
-.tab-button:hover {
-  color: #333;
-}
-
-.tab-button.active {
-  color: #ff286e;
-  border-bottom-color: #ff286e;
-}
-
-.tab-content {
-  animation: fadeIn 0.3s;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.modal-error {
+  margin-top: -10px;
+  text-align: center;
 }
 
 .form {
@@ -792,224 +598,7 @@ const handleUpdatePassword = async () => {
   background-color: #e0e0e0;
 }
 
-/* 模态框 */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(5px);
-}
-
-.modal-content {
-  background: white;
-  padding: 20px;
-  border-radius: 16px;
-  max-width: 90%;
-  max-height: 90%;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-}
-
-.modal-content h3 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  color: #333;
-}
-
-.full-avatar {
-  max-width: 100%;
-  max-height: 70vh;
-  object-fit: contain;
-  border-radius: 8px;
-}
-
-.modal-actions {
-  display: flex;
-  gap: 15px;
-}
-
-.modal-actions button {
-  flex: 1;
-}
-
-.modal-error {
-  margin-top: -10px;
-  text-align: center;
-}
-
-/* 评价列表 */
-.ratings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-
-.rating-card {
-  padding: 15px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.rating-card:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-}
-
-.rating-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.rider-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.rating-stars {
-  color: #fbbf24;
-  font-size: 14px;
-}
-
-.rating-comment {
-  color: #475569;
-  font-size: 14px;
-  margin: 0 0 8px 0;
-  line-height: 1.5;
-}
-
-.rating-time {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-/* 帖子列表 */
-.posts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-
-.post-card {
-  padding: 20px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.post-card:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-}
-
-.post-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
-  gap: 15px;
-}
-
-.post-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1e293b;
-  margin: 0;
-  flex: 1;
-}
-
-.post-time {
-  font-size: 12px;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-
-.post-preview {
-  color: #475569;
-  font-size: 14px;
-  margin: 0 0 12px 0;
-  line-height: 1.6;
-}
-
-.post-stats {
-  display: flex;
-  gap: 20px;
-  font-size: 14px;
-  color: #64748b;
-}
-
-.loading-state,
-.empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: #94a3b8;
-  font-size: 14px;
-}
-
-/* 分页 */
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 15px;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.pagination button {
-  padding: 8px 16px;
-  border: 1px solid #e2e8f0;
-  background: white;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  transition: all 0.3s;
-}
-
-.pagination button:hover:not(:disabled) {
-  background: #f8fafc;
-  border-color: #3b82f6;
-}
-
-.pagination button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.pagination span {
-  font-size: 14px;
-  color: #64748b;
-}
-
 @media (max-width: 768px) {
-  .avatar-section {
-    flex-direction: column;
-    text-align: center;
-  }
-
   .profile-header {
     flex-direction: column;
     align-items: flex-start;

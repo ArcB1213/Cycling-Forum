@@ -27,7 +27,7 @@ from schemas import (
     EditionsResponse, StagesResponse, StageResultsResponse,
     RiderStatsResponse, RiderRacesResponse, RiderWinsResponse,
     RaceRecord, WinRecord,
-    UserRegister, UserLogin, UserResponse, TokenResponse, RefreshTokenRequest,
+    UserRegister, UserLogin, UserResponse, PublicUserResponse, TokenResponse, RefreshTokenRequest,
     EmailVerificationRequest, EmailVerificationResponse, VerifyEmailRequest,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse, RegisterResponse,
     PaginationMeta, PaginatedRidersResponse, PaginatedStageResultsResponse,
@@ -1219,7 +1219,7 @@ async def update_avatar(
 # ============ 车手评分系统 API ============
 
 @app.post("/api/riders/{rider_id}/ratings", response_model=RatingResponse, tags=["Ratings"])
-@limiter.limit("5/minute")
+#@limiter.limit("5/minute")
 async def submit_rating(
     request: Request, 
     response: Response,
@@ -1608,53 +1608,43 @@ async def get_rider_detail_with_ratings(
     }
 
 
-@app.get("/api/auth/my-ratings", response_model=PaginatedRatingsResponse, tags=["Authentication"])
-async def get_my_all_ratings(
-    page: int = 1,
-    limit: int = 10,
-    current_user: User = Depends(get_current_user_async),
-    db: AsyncSession = Depends(get_async_db)
-):
-    """
-    获取当前用户的所有评价
-    
-    参数:
-    - page: 页码，从 1 开始
-    - limit: 每页记录数，默认 10
-    """
+# ============ 用户信息API辅助函数 ============
+
+async def _get_user_ratings(user_id: int, page: int, limit: int, db: AsyncSession):
+    """获取指定用户的评价列表（内部辅助函数）"""
     # 计算总记录数
     count_result = await db.execute(
         select(func.count())
         .select_from(Rating)
-        .filter(Rating.user_id == current_user.user_id)
+        .filter(Rating.user_id == user_id)
     )
     total = count_result.scalar() or 0
-    
+
     # 计算分页参数
     total_pages = (total + limit - 1) // limit
     offset = (page - 1) * limit
-    
-    # 查询评价数据（预加载车手和用户信息，避免 N+1 查询）
+
+    # 查询评价数据（预加载车手和用户信息）
     result = await db.execute(
         select(Rating)
         .options(
             selectinload(Rating.rider),
-            selectinload(Rating.user)  # 添加用户预加载
+            selectinload(Rating.user)
         )
-        .filter(Rating.user_id == current_user.user_id)
+        .filter(Rating.user_id == user_id)
         .order_by(Rating.created_at.desc())
         .offset(offset)
         .limit(limit)
     )
     ratings = result.scalars().all()
-    
+
     # 构建响应数据
     ratings_data = []
     for rating in ratings:
         rating_dict = rating.to_dict()
         rating_dict['rider_name'] = rating.rider.rider_name if rating.rider else None
         ratings_data.append(rating_dict)
-    
+
     return {
         "data": ratings_data,
         "pagination": {
@@ -1668,41 +1658,29 @@ async def get_my_all_ratings(
     }
 
 
-@app.get("/api/auth/my-posts", response_model=PaginatedForumPostsResponse, tags=["Authentication"])
-async def get_my_forum_posts(
-    page: int = 1,
-    limit: int = 10,
-    current_user: User = Depends(get_current_user_async),
-    db: AsyncSession = Depends(get_async_db)
-):
-    """
-    获取当前用户发表的所有帖子
-    
-    参数:
-    - page: 页码，从 1 开始
-    - limit: 每页记录数，默认 10
-    """
+async def _get_user_posts(user_id: int, page: int, limit: int, db: AsyncSession):
+    """获取指定用户的帖子列表（内部辅助函数）"""
     # 计算总记录数（排除已删除的帖子）
     count_result = await db.execute(
         select(func.count())
         .select_from(ForumPost)
         .filter(
-            ForumPost.author_id == current_user.user_id,
+            ForumPost.author_id == user_id,
             ForumPost.is_deleted == False
         )
     )
     total = count_result.scalar() or 0
-    
+
     # 计算分页参数
     total_pages = (total + limit - 1) // limit
     offset = (page - 1) * limit
-    
+
     # 查询帖子数据（预加载作者信息）
     result = await db.execute(
         select(ForumPost)
         .options(selectinload(ForumPost.author))
         .filter(
-            ForumPost.author_id == current_user.user_id,
+            ForumPost.author_id == user_id,
             ForumPost.is_deleted == False
         )
         .order_by(ForumPost.created_at.desc())
@@ -1710,7 +1688,7 @@ async def get_my_forum_posts(
         .limit(limit)
     )
     posts = result.scalars().all()
-    
+
     # 构建响应数据，获取实时浏览量
     posts_data = []
     for post in posts:
@@ -1721,7 +1699,7 @@ async def get_my_forum_posts(
         total_view_count = await get_total_view_count(db, post.post_id)
         post_dict['view_count'] = total_view_count
         posts_data.append(post_dict)
-    
+
     return {
         "data": posts_data,
         "pagination": {
@@ -1735,10 +1713,117 @@ async def get_my_forum_posts(
     }
 
 
+# ============ 获取用户信息API ============
+
+@app.get("/api/async/users/{userId}", response_model=PublicUserResponse, tags=["Users"])
+async def get_user_by_id(
+    userId: int,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取指定用户的公开信息
+
+    返回信息（不含email等隐私信息）:
+    - user_id
+    - nickname
+    - avatar
+    - created_at (注册时间)
+    - is_verified
+    """
+    # 验证用户存在
+    user = await db.get(User, userId)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return {
+        "user_id": user.user_id,
+        "nickname": user.nickname,
+        "avatar": user.avatar,
+        "created_at": user.created_at,
+        "is_verified": user.is_verified
+    }
+
+
+@app.get("/api/async/users/{userId}/ratings", response_model=PaginatedRatingsResponse, tags=["Users"])
+async def get_user_ratings(
+    userId: int,
+    page: int = 1,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取指定用户的评价列表
+
+    权限：需要登录
+    """
+    # 验证用户存在
+    user = await db.get(User, userId)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return await _get_user_ratings(userId, page, limit, db)
+
+
+@app.get("/api/async/users/{userId}/posts", response_model=PaginatedForumPostsResponse, tags=["Users"])
+async def get_user_posts(
+    userId: int,
+    page: int = 1,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取指定用户的帖子列表
+
+    权限：需要登录
+    """
+    # 验证用户存在
+    user = await db.get(User, userId)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return await _get_user_posts(userId, page, limit, db)
+
+
+@app.get("/api/auth/my-ratings", response_model=PaginatedRatingsResponse, tags=["Authentication"])
+async def get_my_all_ratings(
+    page: int = 1,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取当前用户的所有评价
+
+    参数:
+    - page: 页码，从 1 开始
+    - limit: 每页记录数，默认 10
+    """
+    return await _get_user_ratings(current_user.user_id, page, limit, db)
+
+
+@app.get("/api/auth/my-posts", response_model=PaginatedForumPostsResponse, tags=["Authentication"])
+async def get_my_forum_posts(
+    page: int = 1,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    获取当前用户发表的所有帖子
+
+    参数:
+    - page: 页码，从 1 开始
+    - limit: 每页记录数，默认 10
+    """
+    return await _get_user_posts(current_user.user_id, page, limit, db)
+
+
 # ============ 论坛功能 API ============
 
 @app.post("/api/async/forum/posts", response_model=ForumPostWithAuthor, tags=["Forum"])
-@limiter.limit("10/minute")
+#@limiter.limit("10/minute")
 async def create_forum_post(
     request: Request,
     response: Response,
@@ -1766,6 +1851,9 @@ async def create_forum_post(
     post_dict['author_nickname'] = current_user.nickname
     post_dict['author_avatar'] = current_user.avatar
 
+    # 清除帖子列表缓存，确保前端能立即看到新帖子
+    await invalidate_cache_async("forum_posts_list")
+
     return post_dict
 
 
@@ -1774,9 +1862,33 @@ async def create_forum_post(
 async def get_forum_posts(
     page: int = 1,
     limit: int = 20,
+    sort_by: str = "created_at",
+    order: str = "desc",
     db: AsyncSession = Depends(get_async_db)
 ):
-    """获取帖子列表（分页）"""
+    """获取帖子列表（分页，支持排序）
+
+    参数:
+    - page: 页码（默认1）
+    - limit: 每页数量（默认20）
+    - sort_by: 排序字段，可选值: created_at, comment_count, view_count（默认created_at）
+    - order: 排序方向，可选值: asc, desc（默认desc）
+    """
+    # 验证排序字段
+    valid_sort_fields = ["created_at", "comment_count", "view_count"]
+    if sort_by not in valid_sort_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的排序字段: {sort_by}。可选值: {', '.join(valid_sort_fields)}"
+        )
+
+    # 验证排序方向
+    if order not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的排序方向: {order}。可选值: asc, desc"
+        )
+
     # 计算总记录数（排除已删除的帖子）
     count_result = await db.execute(
         select(func.count())
@@ -1789,12 +1901,17 @@ async def get_forum_posts(
     total_pages = (total + limit - 1) // limit
     offset = (page - 1) * limit
 
+    # 动态构建排序
+    sort_column = getattr(ForumPost, sort_by)
+    sort_func = getattr(sort_column, order)()
+    # 例如：ForumPost.created_at.desc() 或 ForumPost.view_count.asc()
+
     # 查询帖子数据（预加载作者信息）
     result = await db.execute(
         select(ForumPost)
         .options(selectinload(ForumPost.author))
         .filter(ForumPost.is_deleted == False)
-        .order_by(ForumPost.created_at.desc())
+        .order_by(sort_func)
         .offset(offset)
         .limit(limit)
     )
@@ -1891,7 +2008,7 @@ async def delete_forum_post(
 
 
 @app.post("/api/async/forum/posts/{post_id}/comments", response_model=CommentWithAuthor, tags=["Forum"])
-@limiter.limit("20/minute")
+#@limiter.limit("20/minute")
 async def create_comment(
     request: Request,
     response: Response,
@@ -2140,14 +2257,49 @@ async def delete_comment(
     if comment.author_id != current_user.user_id:
         raise HTTPException(status_code=403, detail="无权删除此评论")
 
-    # 软删除评论
-    comment.is_deleted = True
+    # 软删除评论及其所有子评论（级联删除）
+    deleted_count = 0
 
-    # 更新帖子评论计数（减1）
+    # 递归查找所有需要删除的子评论ID
+    async def find_all_child_comments(parent_comment_id: int) -> list:
+        """递归查找所有子评论ID"""
+        all_children = [parent_comment_id]
+        to_process = [parent_comment_id]
+
+        while to_process:
+            current_id = to_process.pop(0)
+            # 查找直接子评论
+            result = await db.execute(
+                select(ForumComment.comment_id).filter(
+                    ForumComment.parent_id == current_id,
+                    ForumComment.is_deleted == False
+                )
+            )
+            children = result.scalars().all()
+
+            for child_id in children:
+                if child_id not in all_children:
+                    all_children.append(child_id)
+                    to_process.append(child_id)
+
+        return all_children
+
+    # 获取所有需要删除的评论ID
+    all_comment_ids_to_delete = await find_all_child_comments(comment_id)
+    deleted_count = len(all_comment_ids_to_delete)
+
+    # 批量更新所有相关评论的 is_deleted 状态
+    await db.execute(
+        update(ForumComment)
+        .filter(ForumComment.comment_id.in_(all_comment_ids_to_delete))
+        .values(is_deleted=True, updated_at=datetime.utcnow())
+    )
+
+    # 更新帖子评论计数（减去实际删除的评论数）
     await db.execute(
         update(ForumPost)
         .filter(ForumPost.post_id == post_id)
-        .values(comment_count=ForumPost.comment_count - 1)
+        .values(comment_count=ForumPost.comment_count - deleted_count)
     )
 
     await db.commit()

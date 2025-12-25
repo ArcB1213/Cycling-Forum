@@ -219,7 +219,18 @@ class UserResponse(BaseModel):
     avatar: Optional[str]
     created_at: datetime
     is_verified: bool = False
-    
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PublicUserResponse(BaseModel):
+    """公开用户信息响应（不含 email 等隐私信息）"""
+    user_id: int
+    nickname: str
+    avatar: Optional[str]
+    created_at: datetime
+    is_verified: bool = False
+
     model_config = ConfigDict(from_attributes=True)
 
 

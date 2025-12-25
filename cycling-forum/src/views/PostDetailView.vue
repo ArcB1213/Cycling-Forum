@@ -23,7 +23,7 @@
       <div class="content-card">
         <h1 class="post-title">{{ post?.title }}</h1>
         <div class="post-meta">
-          <div class="post-author">
+          <div class="post-author" @click.stop="goToUserProfile(post?.author_id)">
             <img :src="getAvatarUrl(post?.author_avatar)" class="author-avatar" />
             <span>{{ post?.author_nickname || '未知用户' }}</span>
           </div>
@@ -47,7 +47,7 @@
       <!-- 评论区 -->
       <div class="comments-section">
         <div class="comments-header">
-          <h2>评论 ({{ comments.length }})</h2>
+          <h2>评论 ({{ commentPagination.total }})</h2>
           <div
             :class="[
               'connection-status',
@@ -103,6 +103,7 @@
             @reply="handleReply"
             @delete="handleDeleteComment"
             @refresh="loadComments"
+            @author-click="goToUserProfile"
           />
         </div>
 
@@ -192,7 +193,7 @@ const loadComments = async (page: number = 1) => {
   isLoadingComments.value = true
   try {
     const postId = Number(route.params.postId)
-    const response = await fetchPostComments(postId, page, 20)
+    const response = await fetchPostComments(postId, page, 10)
     comments.value = response.floors
     commentPagination.value = response.pagination
   } catch (err: unknown) {
@@ -359,6 +360,18 @@ const goToForum = () => {
   router.push('/forum')
 }
 
+const goToUserProfile = (authorId: number) => {
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+  // 确保 user_id 是数字类型再比较
+  const currentUserId = Number(currentUser.user_id)
+
+  if (currentUserId === authorId) {
+    router.push('/profile')
+  } else {
+    router.push(`/profile/${authorId}`)
+  }
+}
+
 onMounted(() => {
   // 加载当前用户
   const storedUser = localStorage.getItem('user')
@@ -418,6 +431,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.post-author:hover {
+  opacity: 0.7;
 }
 
 .author-avatar {
@@ -638,37 +657,5 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
-}
-
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 20px;
-  margin-top: 30px;
-}
-
-.btn-page {
-  padding: 8px 20px;
-  background: #667eea;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.btn-page:hover:not(:disabled) {
-  background: #5568d3;
-}
-
-.btn-page:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-.page-info {
-  color: #555;
-  font-weight: 600;
 }
 </style>
