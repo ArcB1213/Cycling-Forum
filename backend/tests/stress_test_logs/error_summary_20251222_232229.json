@@ -1,0 +1,34 @@
+{
+  "error_counts": {
+    "/api/riders/[id]/ratings [POST - UPDATE]:0": 1,
+    "/api/auth/my-ratings [GET]:0": 1
+  },
+  "sample_errors": {
+    "/api/riders/[id]/ratings [POST - UPDATE]:0": [
+      {
+        "timestamp": "2025-12-22T23:20:22.937271",
+        "endpoint": "/api/riders/[id]/ratings [POST - UPDATE]",
+        "status_code": 0,
+        "detail": "连接错误: 服务器无响应或连接被拒绝",
+        "user": "load_test_39@test.com",
+        "extra": {
+          "rider_id": 5,
+          "old_score": 2,
+          "new_score": 3
+        }
+      }
+    ],
+    "/api/auth/my-ratings [GET]:0": [
+      {
+        "timestamp": "2025-12-22T23:22:20.057974",
+        "endpoint": "/api/auth/my-ratings [GET]",
+        "status_code": 0,
+        "detail": "无响应内容",
+        "user": "load_test_47@test.com",
+        "extra": {
+          "page": 2
+        }
+      }
+    ]
+  }
+}
