@@ -38,7 +38,9 @@ class RiderBase(BaseModel):
     rider_id: int
     rider_name: str
     wins: Optional[int] = None  # 可选，按冠军数排序时返回
-    
+    avg_rating: Optional[float] = None  # 可选，按评分排序时返回
+    rating_count: Optional[int] = None  # 可选，按评分排序时返回
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -324,7 +326,8 @@ class RatingResponse(RatingBase):
     created_at: datetime
     updated_at: datetime
     user_nickname: Optional[str] = None
-    
+    rider_name: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

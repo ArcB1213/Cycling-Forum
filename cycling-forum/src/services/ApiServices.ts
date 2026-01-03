@@ -340,6 +340,14 @@ export const updatePassword = async (
 }
 
 /**
+ * 注销用户账号（级联删除所有数据）
+ */
+export const deleteUserAccount = async (): Promise<MessageResponse> => {
+  const response = await apiClient.delete<MessageResponse>('/auth/user')
+  return response.data
+}
+
+/**
  * 获取论坛帖子列表（分页，支持排序）
  */
 export const fetchForumPosts = async (
@@ -621,6 +629,21 @@ export const fetchUserPosts = async (
   return response.data
 }
 
+// ============ 平台统计 API ============
+
+/**
+ * 获取平台统计数据
+ */
+export const fetchPlatformStats = async (): Promise<{
+  rider_count: number
+  user_count: number
+  post_count: number
+  rating_count: number
+}> => {
+  const response = await apiClient.get('/stats')
+  return response.data
+}
+
 // 默认导出所有 API 方法
 export default {
   fetchRaces,
@@ -640,6 +663,7 @@ export default {
   getCurrentUser,
   updateNickname,
   updatePassword,
+  deleteUserAccount,
   fetchForumPosts,
   createForumPost,
   fetchForumPostDetail,
@@ -665,4 +689,5 @@ export default {
   fetchUserById,
   fetchUserRatings,
   fetchUserPosts,
+  fetchPlatformStats,
 }

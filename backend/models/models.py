@@ -106,12 +106,6 @@ class Rider(Base):
         lazy='select',
         cascade="all, delete-orphan"
     )
-    stats: Mapped[Optional["RiderStats"]] = relationship(
-        back_populates='rider',
-        lazy='select',
-        uselist=False,
-        cascade="all, delete-orphan"
-    )
 
     def to_dict(self):
         return {
@@ -279,46 +273,7 @@ class Rating(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'user_nickname': self.user.nickname if self.user else None,
-        }
-
-
-class RiderStats(Base):
-    """车手评分统计汇总表（乐观锁）"""
-    __tablename__ = 'rider_stats'
-    
-    stat_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    rider_id: Mapped[int] = mapped_column(ForeignKey('riders.rider_id'), nullable=False, unique=True, index=True)
-    
-    # 统计数据
-    total_rating_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_score_sum: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    
-    # 乐观锁版本号：每次更新时递增
-    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    
-    # 时间戳
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # 关系
-    rider: Mapped["Rider"] = relationship(back_populates='stats')
-    
-    __table_args__ = (
-        Index('idx_rider_updated_at', 'rider_id', 'updated_at'),
-        {'mysql_engine': 'InnoDB', 'mysql_charset': 'utf8mb4'}
-    )
-    
-    def to_dict(self):
-        avg_score = (
-            round(self.total_score_sum / self.total_rating_count, 2)
-            if self.total_rating_count > 0
-            else 0
-        )
-        return {
-            'stat_id': self.stat_id,
-            'rider_id': self.rider_id,
-            'total_rating_count': self.total_rating_count,
-            'average_score': avg_score,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'rider_name': self.rider.rider_name if self.rider else None,
         }
 
 

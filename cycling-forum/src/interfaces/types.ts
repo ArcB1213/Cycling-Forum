@@ -57,6 +57,8 @@ export interface Rider {
   rider_id: number
   rider_name: string
   wins?: number // 可选，按冠军数排序时返回
+  avg_rating?: number // 可选，按评分排序时返回
+  rating_count?: number // 可选，按评分排序时返回
 }
 
 /** * 对应后端的 'Team' 模型
@@ -393,6 +395,7 @@ export interface Rating extends RatingBase {
   created_at: string // ISO 日期字符串
   updated_at: string
   user_nickname?: string
+  rider_name?: string
 }
 
 /**

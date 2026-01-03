@@ -12,7 +12,7 @@
         @click="$emit('go-to-rider', rating.rider_id)"
       >
         <div class="rating-card-header">
-          <span class="rider-name">{{ (rating as any).rider_name || '未知车手' }}</span>
+          <span class="rider-name">{{ rating.rider_name || '未知车手' }}</span>
           <span class="rating-stars">{{ getStarRating(rating.score) }}</span>
         </div>
         <p class="rating-comment">{{ rating.comment || '无文字评价' }}</p>

@@ -104,6 +104,22 @@
 
       <!-- 修改密码 (仅本人可见) -->
       <PasswordChangeCard v-if="isOwner" @success="handlePasswordSuccess" />
+
+      <!-- 注销账号卡片 (仅本人可见) -->
+      <div v-if="isOwner" class="action-card danger-card">
+        <h3>⚠️ 注销账号</h3>
+        <p class="warning-text">
+          注销后无法恢复，所有数据（评分、帖子、评论）将被永久删除
+        </p>
+        <button
+          @click="handleDeleteAccount"
+          class="btn-danger"
+          :disabled="isDeleting"
+        >
+          {{ isDeleting ? '注销中...' : '注销账号' }}
+        </button>
+        <div v-if="deleteError" class="error-message">{{ deleteError }}</div>
+      </div>
     </div>
   </div>
 </template>
@@ -163,6 +179,10 @@ const showNicknameModal = ref(false)
 const nicknameError = ref('')
 const avatarError = ref('')
 const nicknameSuccess = ref(false)
+
+// 账号删除相关
+const isDeleting = ref(false)
+const deleteError = ref('')
 
 // 用户评价数据
 const ratings = ref<PaginatedRatingsResponse | null>(null)
@@ -367,6 +387,35 @@ const handleUpdateNickname = async () => {
 const handlePasswordSuccess = () => {
   // 密码修改成功的回调（可选）
   console.log('密码修改成功')
+}
+
+const handleDeleteAccount = async () => {
+  // 第一次确认
+  if (!confirm('确定要注销账号吗？')) return
+
+  // 第二次确认
+  if (!confirm('注销后无法恢复，所有数据（评分、帖子、评论）将被永久删除！确定继续吗？')) return
+
+  isDeleting.value = true
+  deleteError.value = ''
+
+  try {
+    await apiService.deleteUserAccount()
+
+    // 清除本地存储
+    localStorage.removeItem('user')
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+
+    alert('账号已成功注销')
+    router.push('/login')
+  } catch (error: unknown) {
+    console.error('注销失败:', error)
+    const err = error as { response?: { data?: { detail?: string } } }
+    deleteError.value = err.response?.data?.detail || '注销失败，请稍后重试'
+  } finally {
+    isDeleting.value = false
+  }
 }
 
 // 监听路由参数变化，当 userId 改变时重新加载数据
@@ -596,6 +645,56 @@ watch(
 
 .btn-secondary:hover {
   background-color: #e0e0e0;
+}
+
+/* 注销账号卡片样式 */
+.danger-card {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  border: 2px solid #fecaca;
+}
+
+.danger-card h3 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #dc2626;
+  margin: 0 0 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.warning-text {
+  font-size: 14px;
+  color: #dc2626;
+  margin-bottom: 20px;
+  line-height: 1.6;
+}
+
+.btn-danger {
+  width: 100%;
+  padding: 12px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 @media (max-width: 768px) {

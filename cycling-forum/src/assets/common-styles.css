@@ -437,22 +437,23 @@
   display: flex;
   align-items: center;
   gap: 15px;
+  cursor: pointer;
+  transition: opacity 0.3s;
 }
 
 .user-info-bar span {
   color: #333;
   font-weight: bold;
-  border: var(--color-primary) 2px solid;
+  border: #3b82f6 2px solid;
   padding: 6px 12px;
   border-radius: 4px;
-  background: var(--color-white);
-  cursor: pointer;
-  transition: var(--transition);
+  background: white;
+  transition: all 0.3s;
 }
 
 .user-info-bar span:hover {
-  background-color: var(--color-primary);
-  color: var(--color-white);
+  background-color: #3b82f6;
+  color: white;
 }
 
 .auth-links {

@@ -186,7 +186,7 @@ const goHome = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(180deg, #ffed00 70%, black 100%);
   padding: 20px;
 }
 
@@ -235,7 +235,7 @@ const goHome = () => {
 
 .form-group input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: #ffed00;
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
@@ -255,7 +255,7 @@ const goHome = () => {
 
 .btn-login {
   padding: 14px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #00ccff;
   color: white;
   border: none;
   border-radius: 6px;
@@ -286,7 +286,7 @@ const goHome = () => {
 }
 
 .register-link a {
-  color: #667eea;
+  color: #00ccff;
   text-decoration: none;
   font-weight: 600;
   margin-left: 4px;
@@ -301,7 +301,7 @@ const goHome = () => {
   top: 50px;
   left: 20px;
   padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.5);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 6px;
@@ -312,7 +312,7 @@ const goHome = () => {
 }
 
 .btn-back-home:hover {
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(3, 3, 3, 1);
   border-color: white;
   transform: translateX(-4px);
 }
@@ -324,7 +324,7 @@ const goHome = () => {
 }
 
 .forgot-password a {
-  color: #667eea;
+  color: #ff6200;
   text-decoration: none;
   font-size: 13px;
 }

@@ -24,6 +24,7 @@ const sortOptions = [
   { value: 'name', label: '按姓名排序' },
   { value: 'stage_wins', label: '按赛段冠军数' },
   { value: 'gc_wins', label: '按总成绩冠军数' },
+  { value: 'rating_score', label: '按平均评分' },
 ]
 
 // 搜索相关状态
@@ -234,6 +235,10 @@ loadRiders()
         <p v-else-if="sortBy === 'gc_wins'" class="rider-wins">
           🥇 {{ rider.wins || 0 }} 总成绩冠军
         </p>
+        <p v-else-if="sortBy === 'rating_score'" class="rider-rating">
+          ⭐ {{ rider.avg_rating?.toFixed(1) || '0.0' }} 分
+          <span class="rating-count">({{ rider.rating_count || 0 }} 人评价)</span>
+        </p>
         <p v-else class="rider-id">ID: {{ rider.rider_id }}</p>
       </div>
 
@@ -343,6 +348,19 @@ loadRiders()
   font-weight: 600;
   color: #f59e0b;
   margin-top: 0.25rem;
+}
+
+.rider-rating {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f59e0b;
+  margin-top: 0.25rem;
+}
+
+.rating-count {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 400;
 }
 
 .no-results p {

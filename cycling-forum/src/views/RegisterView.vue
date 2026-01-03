@@ -325,7 +325,7 @@ const goHome = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(180deg, #ffed00 70%, black 100%);
   padding: 20px;
 }
 
@@ -395,7 +395,7 @@ const goHome = () => {
 
 .btn-register {
   padding: 14px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #00ccff;
   color: white;
   border: none;
   border-radius: 6px;
@@ -422,11 +422,11 @@ const goHome = () => {
   text-align: center;
   margin-top: 24px;
   font-size: 14px;
-  color: #666;
+  color: #666666;
 }
 
 .login-link a {
-  color: #667eea;
+  color: #05aa15;
   text-decoration: none;
   font-weight: 600;
   margin-left: 4px;
@@ -441,7 +441,7 @@ const goHome = () => {
   top: 50px;
   left: 20px;
   padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.5);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 6px;
@@ -452,7 +452,7 @@ const goHome = () => {
 }
 
 .btn-back-home:hover {
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(3, 3, 3, 1);
   border-color: white;
   transform: translateX(-4px);
 }
@@ -468,7 +468,7 @@ const goHome = () => {
   position: relative;
   width: 100px;
   height: 100px;
-  border: 2px dashed #667eea;
+  border: 2px dashed #00ccff;
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -481,7 +481,7 @@ const goHome = () => {
 }
 
 .avatar-preview:hover {
-  border-color: #764ba2;
+  border-color: #082dd1;
   background: #f0f2f8;
 }
 
@@ -528,7 +528,7 @@ const goHome = () => {
 .btn-select-avatar,
 .btn-clear-avatar {
   padding: 8px 16px;
-  background: #667eea;
+  background: #00ccff;
   color: white;
   border: none;
   border-radius: 6px;
@@ -540,7 +540,7 @@ const goHome = () => {
 }
 
 .btn-select-avatar:hover {
-  background: #764ba2;
+  background: #082dd1;
 }
 
 .btn-clear-avatar {
@@ -549,12 +549,6 @@ const goHome = () => {
 
 .btn-clear-avatar:hover {
   background: #c0392b;
-}
-
-.btn-back-home:hover {
-  background: rgba(255, 255, 255, 0.4);
-  border-color: white;
-  transform: translateX(-4px);
 }
 
 /* 注册成功提示样式 */
@@ -615,7 +609,7 @@ const goHome = () => {
   width: 100%;
   padding: 12px;
   background: #f0f2f8;
-  color: #667eea;
+  background: #00ccff;
   border: 1px solid #667eea;
   border-radius: 6px;
   font-size: 14px;
@@ -639,8 +633,7 @@ const goHome = () => {
 .btn-go-login {
   display: inline-block;
   padding: 14px 40px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  color: #00ccff;
   text-decoration: none;
   border-radius: 6px;
   font-size: 16px;

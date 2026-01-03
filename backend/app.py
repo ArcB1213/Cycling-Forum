@@ -19,7 +19,7 @@ from datetime import datetime
 from models.database import get_db, get_async_db,close_db_connections
 
 # 导入模型
-from models.models import Race, Edition, Stage, StageResult, Rider, Team, User, Rating, RiderStats, GeneralClassification, ForumPost, ForumComment
+from models.models import Race, Edition, Stage, StageResult, Rider, Team, User, Rating, GeneralClassification, ForumPost, ForumComment
 
 # 导入 Pydantic 响应模型
 from schemas import (
@@ -181,6 +181,51 @@ def delete_old_avatar(avatar_path: str) -> None:
             print(f"[WARN] 旧头像文件不存在: {filename}")
     except Exception as e:
         print(f"[ERROR] 删除旧头像失败: {str(e)}")
+
+
+# ============ 评分统计辅助函数 ============
+
+async def get_rider_rating_stats_realtime(
+    rider_id: int,
+    db: AsyncSession
+) -> dict:
+    """
+    实时计算车手评分统计（不依赖 rider_stats 表）
+
+    Args:
+        rider_id: 车手ID
+        db: 异步数据库会话
+
+    Returns:
+        包含 stat_id, rider_id, total_rating_count, average_score, updated_at 的字典
+    """
+    # 聚合查询评分数据
+    result = await db.execute(
+        select(
+            func.count(Rating.rating_id).label('count'),
+            func.avg(Rating.score).label('avg_score')
+        )
+        .filter(Rating.rider_id == rider_id)
+    )
+    row = result.first()
+
+    if not row or row.count == 0:
+        # 没有评分记录
+        return {
+            "stat_id": 0,
+            "rider_id": rider_id,
+            "total_rating_count": 0,
+            "average_score": 0.0,
+            "updated_at": datetime.utcnow()
+        }
+
+    return {
+        "stat_id": 0,  # 不再使用 stat_id
+        "rider_id": rider_id,
+        "total_rating_count": row.count,
+        "average_score": round(float(row.avg_score), 2),
+        "updated_at": datetime.utcnow()  # 实时数据，更新时间为当前时间
+    }
 
 
 # ============ API 路由 ============
@@ -388,14 +433,16 @@ async def get_riders_async(
     db: AsyncSession = Depends(get_async_db)
 ):
     """获取所有车手列表 - 异步版本（推荐用于高并发）
-    
+
     参数:
     - page: 页码，从 1 开始
     - limit: 每页记录数，默认 16
     - search: 可选，搜索车手姓名（模糊匹配）
-    - sort_by: 排序方式，可选值：name（姓名）、stage_wins（赛段冠军数）、gc_wins（总成绩冠军数）
+    - sort_by: 排序方式，可选值：name（姓名）、stage_wins（赛段冠军数）、gc_wins（总成绩冠军数）、rating_score（平均评分）
     """
     # 根据排序方式构建不同的查询
+    print(f"DEBUG: sort_by = {sort_by}")  # 调试输出
+
     if sort_by == "stage_wins":
         # 按赛段冠军数排序（子查询）
         stage_wins_subq = (
@@ -467,7 +514,60 @@ async def get_riders_async(
         )
         rows = result.all()
         riders_data = [{"rider_id": row[0].rider_id, "rider_name": row[0].rider_name, "wins": row[1]} for row in rows]
-        
+
+    elif sort_by == "rating_score":
+        print(f"DEBUG: Entering rating_score branch")  # 调试输出
+        # 按平均评分排序（子查询）
+        rating_stats_subq = (
+            select(
+                Rating.rider_id,
+                func.avg(Rating.score).label('avg_score'),
+                func.count(Rating.rating_id).label('rating_count')
+            )
+            .group_by(Rating.rider_id)
+            .subquery()
+        )
+
+        query = (
+            select(
+                Rider,
+                func.coalesce(rating_stats_subq.c.avg_score, 0).label('avg_rating'),
+                rating_stats_subq.c.rating_count
+            )
+            .outerjoin(rating_stats_subq, Rider.rider_id == rating_stats_subq.c.rider_id)
+        )
+        count_query = select(func.count()).select_from(Rider)
+
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(Rider.rider_name.ilike(search_pattern))
+            count_query = count_query.filter(Rider.rider_name.ilike(search_pattern))
+
+        # 计算总记录数
+        count_result = await db.execute(count_query)
+        total = count_result.scalar() or 0
+        total_pages = (total + limit - 1) // limit
+        offset = (page - 1) * limit
+
+        # 按平均评分降序，同评分按评分人数降序，再同则按姓名排序
+        result = await db.execute(
+            query.order_by(
+                text('avg_rating DESC'),
+                text('rating_count DESC'),
+                Rider.rider_name
+            ).offset(offset).limit(limit)
+        )
+        rows = result.all()
+        riders_data = [
+            {
+                "rider_id": row[0].rider_id,
+                "rider_name": row[0].rider_name,
+                "avg_rating": float(row[1]) if row[1] else 0,
+                "rating_count": row[2] if row[2] else 0
+            }
+            for row in rows
+        ]
+
     else:
         # 默认按姓名排序
         query = select(Rider)
@@ -1056,6 +1156,35 @@ def clear_cache(pattern: str = "*"):
     return {"message": f"已清除 {count} 个缓存键", "pattern": pattern}
 
 
+@app.get("/api/stats", tags=["General"])
+async def get_platform_stats(db: AsyncSession = Depends(get_async_db)):
+    """获取平台统计数据"""
+    # 统计车手总数
+    rider_count_result = await db.execute(select(func.count()).select_from(Rider))
+    rider_count = rider_count_result.scalar() or 0
+
+    # 统计用户总数
+    user_count_result = await db.execute(select(func.count()).select_from(User))
+    user_count = user_count_result.scalar() or 0
+
+    # 统计帖子总数（未删除的）
+    post_count_result = await db.execute(
+        select(func.count()).select_from(ForumPost).filter(ForumPost.is_deleted == False)
+    )
+    post_count = post_count_result.scalar() or 0
+
+    # 统计评价总数
+    rating_count_result = await db.execute(select(func.count()).select_from(Rating))
+    rating_count = rating_count_result.scalar() or 0
+
+    return {
+        "rider_count": rider_count,
+        "user_count": user_count,
+        "post_count": post_count,
+        "rating_count": rating_count
+    }
+
+
 # ============ 用户认证端点 ============
 @app.post("/api/auth/reset-password", response_model=MessageResponse, tags=["Authentication"])
 def reset_password(reset_data: ResetPasswordRequest, db: Session = Depends(get_db)):
@@ -1128,6 +1257,60 @@ def update_password(
     db.commit()
     
     return MessageResponse(message="密码修改成功", success=True)
+
+
+@app.delete("/api/auth/user", response_model=MessageResponse, tags=["Authentication"])
+async def delete_user_account(
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """注销用户账号（级联删除）
+
+    删除用户及其所有相关数据：
+    - 评分记录（并更新 rider_stats 统计表）
+    - 论坛帖子
+    - 评论记录
+
+    警告：此操作不可逆，所有数据将被永久删除
+    """
+    try:
+        # 重新加载用户及其关系（确保级联删除生效）
+        result = await db.execute(
+            select(User)
+            .options(
+                selectinload(User.ratings),
+                selectinload(User.forum_posts),
+                selectinload(User.forum_comments)
+            )
+            .filter(User.user_id == current_user.user_id)
+        )
+        user = result.scalar_one()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        # 删除用户（SQLAlchemy 自动级联删除所有相关数据）
+        await db.delete(user)
+        await db.commit()
+
+        # 清除相关缓存
+        await invalidate_cache_async("forum_posts_list")
+        await invalidate_cache_async("rider_rating_stats:*")
+        await invalidate_cache_async("rider_detail_with_ratings:*")
+
+        return MessageResponse(
+            message="账号已成功注销",
+            success=True
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="注销失败，请稍后重试"
+        )
 
 
 # ============ 文件上传端点 ============
@@ -1258,36 +1441,19 @@ async def submit_rating(
         
         if existing_rating:
             # ========== 更新已有评分 ==========
-            old_score = existing_rating.score
-            score_diff = rating_data.score - old_score
-            
             existing_rating.score = rating_data.score
             existing_rating.comment = rating_data.comment
             existing_rating.updated_at = datetime.utcnow()
-            
-            # 使用 MySQL UPSERT 原子更新统计表
-            # 如果 RiderStats 不存在则插入（score_diff 作为初始值），存在则更新
-            await db.execute(
-                text("""
-                    INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
-                    VALUES (:rider_id, 1, :score_diff, 1, NOW())
-                    ON DUPLICATE KEY UPDATE
-                        total_score_sum = total_score_sum + :score_diff,
-                        version = version + 1,
-                        updated_at = NOW()
-                """),
-                {"rider_id": rider_id, "score_diff": score_diff}
-            )
-            
+
             await db.commit()
-            await db.refresh(existing_rating)
+            await db.refresh(existing_rating, attribute_names=['user', 'rider'])
             existing_rating.user = current_user
-            
+
             # 清除该车手的评分相关缓存，确保前端获取最新数据（异步版本，避免阻塞）
             from cache import invalidate_cache_async
             await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
             await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
-            
+
             return existing_rating.to_dict()
         else:
             # ========== 新增评分 ==========
@@ -1298,31 +1464,16 @@ async def submit_rating(
                 comment=rating_data.comment
             )
             db.add(new_rating)
-            
-            # 使用 MySQL UPSERT 原子更新统计表
-            # 如果 RiderStats 不存在则插入，存在则累加
-            await db.execute(
-                text("""
-                    INSERT INTO rider_stats (rider_id, total_rating_count, total_score_sum, version, updated_at)
-                    VALUES (:rider_id, 1, :score, 1, NOW())
-                    ON DUPLICATE KEY UPDATE
-                        total_rating_count = total_rating_count + 1,
-                        total_score_sum = total_score_sum + :score,
-                        version = version + 1,
-                        updated_at = NOW()
-                """),
-                {"rider_id": rider_id, "score": rating_data.score}
-            )
-            
+
             await db.commit()
-            await db.refresh(new_rating)
+            await db.refresh(new_rating, attribute_names=['user', 'rider'])
             new_rating.user = current_user
-            
+
             # 清除该车手的评分相关缓存，确保前端获取最新数据（异步版本，避免阻塞）
             from cache import invalidate_cache_async
             await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
             await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
-            
+
             return new_rating.to_dict()
     
     except IntegrityError as e:
@@ -1365,8 +1516,8 @@ async def get_rider_rating_stats(
     rider_id: int,
     db: AsyncSession = Depends(get_async_db)
 ):
-    """获取车手评分统计（带缓存）
-    
+    """获取车手评分统计（实时计算，带缓存）
+
     功能：
     - 获取车手的平均分和总评价人数
     - 数据缓存 5 分钟，提高查询性能
@@ -1377,24 +1528,9 @@ async def get_rider_rating_stats(
     rider = result.scalar_one_or_none()
     if not rider:
         raise HTTPException(status_code=404, detail="车手不存在")
-    
-    # 获取统计数据
-    result = await db.execute(
-        select(RiderStats).filter(RiderStats.rider_id == rider_id)
-    )
-    rider_stats = result.scalar_one_or_none()
-    
-    if not rider_stats:
-        # 尚无评分，返回默认统计
-        return {
-            "stat_id": 0,
-            "rider_id": rider_id,
-            "total_rating_count": 0,
-            "average_score": 0,
-            "updated_at": datetime.utcnow()
-        }
-    
-    return rider_stats.to_dict()
+
+    # 使用实时计算
+    return await get_rider_rating_stats_realtime(rider_id, db)
 
 
 @app.get("/api/riders/{rider_id}/ratings", response_model=PaginatedRatingsResponse, tags=["Ratings"])
@@ -1430,7 +1566,7 @@ async def get_rider_ratings(
     # 查询分页数据（按创建时间降序）
     result = await db.execute(
         select(Rating)
-        .options(selectinload(Rating.user))
+        .options(selectinload(Rating.user), selectinload(Rating.rider))
         .filter(Rating.rider_id == rider_id)
         .order_by(Rating.created_at.desc())
         .offset(offset)
@@ -1471,7 +1607,9 @@ async def get_my_rating(
     
     # 查询用户的评分
     result = await db.execute(
-        select(Rating).filter(
+        select(Rating)
+        .options(selectinload(Rating.user), selectinload(Rating.rider))
+        .filter(
             Rating.rider_id == rider_id,
             Rating.user_id == current_user.user_id
         )
@@ -1519,33 +1657,15 @@ async def delete_rating(
     
     if not existing_rating:
         raise HTTPException(status_code=404, detail="您尚未对该车手进行评分")
-    
-    # 保存评分信息（用于更新统计）
-    deleted_score = existing_rating.score
-    
+
     # 删除评分记录
     await db.delete(existing_rating)
-    
-    # 使用 MySQL 原子操作更新 RiderStats
-    # 减少评分计数和总分
-    await db.execute(
-        text("""
-            UPDATE rider_stats
-            SET total_rating_count = GREATEST(0, total_rating_count - 1),
-                total_score_sum = GREATEST(0, total_score_sum - :score),
-                version = version + 1,
-                updated_at = NOW()
-            WHERE rider_id = :rider_id
-        """),
-        {"rider_id": rider_id, "score": deleted_score}
-    )
-    
     await db.commit()
-    
+
     # 清除该车手的评分相关缓存
     await invalidate_cache_async(f"rider_rating_stats:{rider_id}:*")
     await invalidate_cache_async(f"rider_detail_with_ratings:{rider_id}:*")
-    
+
     return MessageResponse(message="评分已删除", success=True)
 
 
@@ -1568,13 +1688,13 @@ async def get_rider_detail_with_ratings(
     rider = result.scalar_one_or_none()
     if not rider:
         raise HTTPException(status_code=404, detail="车手不存在")
-    
-    # 获取评分统计
-    result = await db.execute(
-        select(RiderStats).filter(RiderStats.rider_id == rider_id)
-    )
-    rider_stats = result.scalar_one_or_none()
-    stats_dict = rider_stats.to_dict() if rider_stats else None
+
+    # 获取评分统计（实时计算）
+    stats_dict = await get_rider_rating_stats_realtime(rider_id, db)
+
+    # 如果 total_rating_count 为 0，将 stats 设为 None
+    if stats_dict["total_rating_count"] == 0:
+        stats_dict = None
     
     # 获取当前用户的评分（如果已登录）
     user_rating = None
@@ -1592,7 +1712,7 @@ async def get_rider_detail_with_ratings(
     # 获取最近 5 条评价
     result = await db.execute(
         select(Rating)
-        .options(selectinload(Rating.user))
+        .options(selectinload(Rating.user), selectinload(Rating.rider))
         .filter(Rating.rider_id == rider_id)
         .order_by(Rating.created_at.desc())
         .limit(5)
@@ -1638,12 +1758,8 @@ async def _get_user_ratings(user_id: int, page: int, limit: int, db: AsyncSessio
     )
     ratings = result.scalars().all()
 
-    # 构建响应数据
-    ratings_data = []
-    for rating in ratings:
-        rating_dict = rating.to_dict()
-        rating_dict['rider_name'] = rating.rider.rider_name if rating.rider else None
-        ratings_data.append(rating_dict)
+    # 直接使用 to_dict()，已经包含了 rider_name
+    ratings_data = [rating.to_dict() for rating in ratings]
 
     return {
         "data": ratings_data,
